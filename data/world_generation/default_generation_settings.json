@@ -1,0 +1,1 @@
+{"sectorSize":5000,"minimumAsteroidsPerSector":3,"maximumAsteroidsPerSector":12,"asteroidSizeWeights":{"Tiny":0.25,"Small":0.35,"Medium":0.25,"Large":0.12,"Huge":0.03}}

@@ -1,0 +1,47 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/presentation/ui/DebugOverlay.cs" id="1"]
+
+[node name="DebugOverlay" type="CanvasLayer"]
+script = ExtResource("1")
+process_mode = 3
+
+[node name="Margin" type="MarginContainer" parent="."]
+offset_left = 18.0
+offset_top = 18.0
+offset_right = 380.0
+offset_bottom = 155.0
+
+[node name="Panel" type="PanelContainer" parent="Margin"]
+
+[node name="Content" type="VBoxContainer" parent="Margin/Panel"]
+theme_override_constants/separation = 5
+
+[node name="Title" type="Label" parent="Margin/Panel/Content"]
+text = "SpaceFactory"
+theme_override_font_sizes/font_size = 28
+
+[node name="Prototype" type="Label" parent="Margin/Panel/Content"]
+text = "Technischer Prototyp"
+theme_override_colors/font_color = Color(0.3, 0.8, 1, 1)
+
+[node name="Sector" type="Label" parent="Margin/Panel/Content"]
+text = "Lade Welt …"
+
+[node name="Pause" type="Label" parent="."]
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -145.0
+offset_top = -45.0
+offset_right = 145.0
+offset_bottom = 45.0
+grow_horizontal = 2
+grow_vertical = 2
+text = "PAUSE\nEscape zum Fortsetzen"
+horizontal_alignment = 1
+vertical_alignment = 1
+theme_override_font_sizes/font_size = 24
+visible = false

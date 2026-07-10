@@ -1,0 +1,1 @@
+{"id":"smelt_iron","displayName":"Eisen schmelzen","durationSeconds":2.0,"inputs":[{"itemId":"iron_ore","amount":2}],"outputs":[{"itemId":"iron_plate","amount":1}]}

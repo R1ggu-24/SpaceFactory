@@ -1,0 +1,1 @@
+{"id":"small_iron_asteroid","displayName":"Kleiner Eisenasteroid","size":"Small","minimumRadius":80,"maximumRadius":140,"resourceDeposits":[{"itemId":"iron_ore","minimumAmount":100,"maximumAmount":500,"weight":1.0}]}

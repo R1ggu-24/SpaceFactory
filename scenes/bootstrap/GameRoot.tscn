@@ -1,0 +1,21 @@
+[gd_scene load_steps=5 format=3]
+
+[ext_resource type="Script" path="res://scripts/presentation/bootstrap/GameRoot.cs" id="1"]
+[ext_resource type="PackedScene" path="res://scenes/ship/PlayerShip.tscn" id="2"]
+[ext_resource type="PackedScene" path="res://scenes/ui/DebugOverlay.tscn" id="3"]
+[ext_resource type="PackedScene" path="res://scenes/world_map/WorldMap.tscn" id="4"]
+
+[node name="GameRoot" type="Node"]
+script = ExtResource("1")
+process_mode = 3
+
+[node name="World" type="Node2D" parent="."]
+
+[node name="Sectors" type="Node2D" parent="World"]
+
+[node name="PlayerShip" parent="World" instance=ExtResource("2")]
+position = Vector2(2500, 2500)
+
+[node name="DebugOverlay" parent="." instance=ExtResource("3")]
+
+[node name="WorldMap" parent="." instance=ExtResource("4")]

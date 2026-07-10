@@ -1,0 +1,1 @@
+{"id":"cargo_upgrade_1","displayName":"Cargo Upgrade I","description":"Erweitert den Frachtraum des Raumschiffs.","requirements":[{"itemId":"iron_plate","amount":100},{"itemId":"reinforced_frame","amount":10}],"effects":{"storageCapacity":50}}

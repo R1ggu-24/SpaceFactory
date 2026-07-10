@@ -1,0 +1,42 @@
+; Engine configuration file.
+; Prefer editing this file through the Godot editor.
+
+config_version=5
+
+[application]
+
+config/name="SpaceFactory"
+run/main_scene="res://scenes/bootstrap/GameRoot.tscn"
+
+[display]
+
+window/size/viewport_width=1280
+window/size/viewport_height=720
+window/size/window_width_override=1280
+window/size/window_height_override=720
+window/stretch/mode="canvas_items"
+
+[dotnet]
+
+project/assembly_name="SpaceFactory"
+
+[rendering]
+
+renderer/rendering_method="gl_compatibility"
+renderer/rendering_method.mobile="gl_compatibility"
+environment/defaults/default_clear_color=Color(0.008, 0.012, 0.035, 1)
+
+[input]
+
+move_up={"deadzone": 0.5, "events": [Object(InputEventKey,"physical_keycode":87), Object(InputEventKey,"physical_keycode":4194320)]}
+move_down={"deadzone": 0.5, "events": [Object(InputEventKey,"physical_keycode":83), Object(InputEventKey,"physical_keycode":4194322)]}
+move_left={"deadzone": 0.5, "events": [Object(InputEventKey,"physical_keycode":65), Object(InputEventKey,"physical_keycode":4194319)]}
+move_right={"deadzone": 0.5, "events": [Object(InputEventKey,"physical_keycode":68), Object(InputEventKey,"physical_keycode":4194321)]}
+pause={"deadzone": 0.5, "events": [Object(InputEventKey,"physical_keycode":4194305)]}
+interact={"deadzone": 0.5, "events": [Object(InputEventKey,"physical_keycode":69)]}
+open_map={"deadzone": 0.5, "events": [Object(InputEventKey,"physical_keycode":77)]}
+enter_exit_ship={"deadzone": 0.5, "events": [Object(InputEventKey,"physical_keycode":70)]}
+inventory={"deadzone": 0.5, "events": [Object(InputEventKey,"physical_keycode":73)]}
+build_mode={"deadzone": 0.5, "events": [Object(InputEventKey,"physical_keycode":66)]}
+zoom_in={"deadzone": 0.5, "events": [Object(InputEventMouseButton,"button_index":4)]}
+zoom_out={"deadzone": 0.5, "events": [Object(InputEventMouseButton,"button_index":5)]}

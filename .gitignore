@@ -1,0 +1,21 @@
+# Godot
+.godot/
+export.cfg
+export_presets.cfg
+
+# .NET
+bin/
+obj/
+TestResults/
+*.user
+*.suo
+
+# Editors and local tools
+.vscode/*.log
+.tools/
+
+# OS and temporary files
+.DS_Store
+Thumbs.db
+*.tmp
+*.bak
