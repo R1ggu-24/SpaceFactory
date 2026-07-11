@@ -10,7 +10,7 @@ process_mode = 3
 offset_left = 18.0
 offset_top = 18.0
 offset_right = 380.0
-offset_bottom = 155.0
+offset_bottom = 185.0
 
 [node name="Panel" type="PanelContainer" parent="Margin"]
 

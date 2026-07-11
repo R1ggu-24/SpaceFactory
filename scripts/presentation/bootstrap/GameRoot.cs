@@ -3,6 +3,8 @@ using SpaceFactory.Core.World.Asteroids;
 using SpaceFactory.Core.World.Generation;
 using SpaceFactory.Core.World.Seeds;
 using SpaceFactory.Core.World.Sectors;
+using SpaceFactory.Presentation.Player;
+using SpaceFactory.Presentation.Ship;
 using SpaceFactory.Presentation.UI;
 using SpaceFactory.Presentation.World;
 using SpaceFactory.Presentation.WorldMap;
@@ -16,7 +18,8 @@ public partial class GameRoot : Node
     private readonly DeterministicWorldGenerator _generator = new();
     private readonly Dictionary<SectorCoordinate, SectorView> _loadedSectors = [];
     private Node2D _sectorContainer = null!;
-    private Node2D _ship = null!;
+    private PlayerShipController _ship = null!;
+    private OnFootPlayerController _onFootPlayer = null!;
     private DebugOverlay _overlay = null!;
     private WorldMapController _worldMap = null!;
     private SectorCoordinate _currentSector;
@@ -24,7 +27,8 @@ public partial class GameRoot : Node
     public override void _Ready()
     {
         _sectorContainer = GetNode<Node2D>("World/Sectors");
-        _ship = GetNode<Node2D>("World/PlayerShip");
+        _ship = GetNode<PlayerShipController>("World/PlayerShip");
+        _onFootPlayer = GetNode<OnFootPlayerController>("World/OnFootPlayer");
         _overlay = GetNode<DebugOverlay>("DebugOverlay");
         _worldMap = GetNode<WorldMapController>("WorldMap");
         LoadAround(new SectorCoordinate(0, 0));
@@ -33,9 +37,10 @@ public partial class GameRoot : Node
 
     public override void _Process(double delta)
     {
+        var activePosition = _onFootPlayer.IsControlActive ? _onFootPlayer.GlobalPosition : _ship.GlobalPosition;
         var coordinate = new SectorCoordinate(
-            Mathf.FloorToInt(_ship.GlobalPosition.X / SectorSize),
-            Mathf.FloorToInt(_ship.GlobalPosition.Y / SectorSize));
+            Mathf.FloorToInt(activePosition.X / SectorSize),
+            Mathf.FloorToInt(activePosition.Y / SectorSize));
         if (coordinate != _currentSector)
         {
             LoadAround(coordinate);
@@ -49,6 +54,11 @@ public partial class GameRoot : Node
         {
             GetTree().Paused = !GetTree().Paused;
             _overlay.SetPaused(GetTree().Paused);
+            GetViewport().SetInputAsHandled();
+        }
+        else if (@event.IsActionPressed("enter_exit_ship"))
+        {
+            ToggleControlMode();
             GetViewport().SetInputAsHandled();
         }
     }
@@ -101,6 +111,21 @@ public partial class GameRoot : Node
     private void UpdateUi()
     {
         _overlay.UpdateSector(Seed, _currentSector);
+        _overlay.UpdateControlMode(_onFootPlayer.IsControlActive);
         _worldMap.SetCurrentSector(_currentSector);
+    }
+
+    private void ToggleControlMode()
+    {
+        var enterOnFootMode = !_onFootPlayer.IsControlActive;
+        if (enterOnFootMode)
+        {
+            _onFootPlayer.GlobalPosition = _ship.GlobalPosition + new Vector2(180, 0).Rotated(_ship.Rotation);
+            _onFootPlayer.Rotation = _ship.Rotation;
+        }
+
+        _ship.SetControlActive(!enterOnFootMode);
+        _onFootPlayer.SetControlActive(enterOnFootMode);
+        UpdateUi();
     }
 }

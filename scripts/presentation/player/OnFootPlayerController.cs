@@ -1,13 +1,13 @@
 using Godot;
 
-namespace SpaceFactory.Presentation.Ship;
+namespace SpaceFactory.Presentation.Player;
 
-public partial class PlayerShipController : CharacterBody2D
+public partial class OnFootPlayerController : CharacterBody2D
 {
     [Export]
-    public float MovementSpeed { get; set; } = 650.0f;
+    public float MovementSpeed { get; set; } = 280.0f;
 
-    public bool IsControlActive { get; private set; } = true;
+    public bool IsControlActive { get; private set; }
 
     public override void _PhysicsProcess(double delta)
     {
@@ -30,6 +30,7 @@ public partial class PlayerShipController : CharacterBody2D
     public void SetControlActive(bool active)
     {
         IsControlActive = active;
+        Visible = active;
         GetNode<Camera2D>("Camera2D").Enabled = active;
         if (!active)
         {

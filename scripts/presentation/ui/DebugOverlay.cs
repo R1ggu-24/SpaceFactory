@@ -7,6 +7,9 @@ public partial class DebugOverlay : CanvasLayer
 {
     private Label _sectorLabel = null!;
     private Label _pauseLabel = null!;
+    private bool _isOnFoot;
+    private long _seed;
+    private SectorCoordinate _coordinate;
 
     public override void _Ready()
     {
@@ -16,8 +19,22 @@ public partial class DebugOverlay : CanvasLayer
 
     public void UpdateSector(long seed, SectorCoordinate coordinate)
     {
-        _sectorLabel.Text = $"Welt-Seed: {seed}\nSektor: {coordinate.X}, {coordinate.Y}\nWASD: Fliegen   M: Karte   Esc: Pause";
+        _seed = seed;
+        _coordinate = coordinate;
+        RefreshStatus();
+    }
+
+    public void UpdateControlMode(bool isOnFoot)
+    {
+        _isOnFoot = isOnFoot;
+        RefreshStatus();
     }
 
     public void SetPaused(bool paused) => _pauseLabel.Visible = paused;
+
+    private void RefreshStatus()
+    {
+        var mode = _isOnFoot ? "Zu Fuß" : "Raumschiff";
+        _sectorLabel.Text = $"Welt-Seed: {_seed}\nSektor: {_coordinate.X}, {_coordinate.Y}\nModus: {mode}\nWASD: Bewegen   F: Modus wechseln   M: Karte   Esc: Pause";
+    }
 }
