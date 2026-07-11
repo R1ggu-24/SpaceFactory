@@ -7,7 +7,11 @@ public partial class PlayerShipController : CharacterBody2D
     [Export]
     public float MovementSpeed { get; set; } = 650.0f;
 
+    [Export]
+    public float CockpitEntryRadius { get; set; } = 70.0f;
+
     public bool IsControlActive { get; private set; } = true;
+    public Vector2 CockpitEntryPosition => GetNode<Marker2D>("CockpitEntryPoint").GlobalPosition;
 
     public override void _PhysicsProcess(double delta)
     {

@@ -1,19 +1,32 @@
-[gd_scene load_steps=4 format=3]
+[gd_scene load_steps=5 format=3]
 
 [ext_resource type="Script" path="res://scripts/presentation/player/OnFootPlayerController.cs" id="1"]
 [ext_resource type="Texture2D" path="res://assets/sprites/player/astronaut.png" id="2"]
+[ext_resource type="Texture2D" path="res://assets/sprites/tools/mining_tool.png" id="3"]
 
 [sub_resource type="CapsuleShape2D" id="CapsuleShape2D_player"]
-radius = 40.0
-height = 108.0
+radius = 20.0
+height = 54.0
 
 [node name="OnFootPlayer" type="CharacterBody2D"]
 script = ExtResource("1")
 visible = false
+collision_layer = 2
+collision_mask = 0
 
 [node name="Sprite" type="Sprite2D" parent="."]
 texture = ExtResource("2")
-scale = Vector2(0.14, 0.14)
+scale = Vector2(0.075, 0.075)
+
+[node name="MiningTool" type="Node2D" parent="."]
+position = Vector2(22, -10)
+
+[node name="Sprite" type="Sprite2D" parent="MiningTool"]
+texture = ExtResource("3")
+scale = Vector2(0.05, 0.05)
+
+[node name="Muzzle" type="Marker2D" parent="MiningTool"]
+position = Vector2(0, -30)
 
 [node name="CollisionShape2D" type="CollisionShape2D" parent="."]
 shape = SubResource("CapsuleShape2D_player")

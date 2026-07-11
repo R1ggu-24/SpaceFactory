@@ -1,7 +1,37 @@
 # Prozedurale Generierung
 
-Jeder Sektor erhält einen lokalen Zustand aus Welt-Seed, X, Y und einem Generierungs-Salt. Die Werte werden mit festen 64-Bit-Konstanten gemischt und initialisieren einen lokalen SplitMix64-Generator. Es gibt keinen globalen Zufallszustand; die Ladereihenfolge kann das Ergebnis daher nicht verändern.
+## Deterministische Sektoren
 
-Die Einstellungen definieren Sektorgröße, minimale/maximale Asteroidenzahl und Gewichte für `Tiny`, `Small`, `Medium`, `Large` und `Huge`. Position, Radius, Typ und Ressource werden aus dem lokalen Generator abgeleitet. Gleiche Eingaben erzeugen byte-stabil dieselben Domänenwerte innerhalb derselben Generatorversion.
+Die praktisch unendliche Welt ist in Sektoren von standardmäßig 5000 × 5000 Welteinheiten unterteilt. Aus Welt-Seed, Sektor-X/Y, System-Salt und festen 64-Bit-Konstanten entsteht für jeden Abschnitt ein eigener SplitMix64-Zustand. Es gibt keinen globalen Zufallsgenerator; Lade-Reihenfolge und bisherige Flugstrecke verändern deshalb kein Ergebnis.
 
-Die Demo hält nur den aktuellen Sektor und acht Nachbarn. Entfernte Sektoren werden entladen. Später können Generatorversion, Biome, Gefahren und besondere Orte über separate Salts ergänzt werden, ohne unabhängige Teilsysteme zu verschieben. Persistente Spieleränderungen werden nach der Regenerierung als Deltas angewendet.
+Jeder felsige Komet erhält eine stabile ID sowie reproduzierbare Werte für Position, Größe, Ressource, Rotation, Form-Seed, Rauheit, Höhenvariation und Krater. Große, ausreichend ebene Körper erhalten zusätzlich `SupportsLanding`. Dieses Flag ist nur eine Vorbereitung; Landen und Bauflächen sind noch nicht implementiert.
+
+## Natürliche Verteilung
+
+Der `CometFieldPlanner` plant explizite Kometenfelder statt einer weltweiten gleichmäßigen Dichte. Eine große Planungszelle umfasst standardmäßig 16 × 16 Sektoren und besitzt mit 68 Prozent Wahrscheinlichkeit einen Feldkandidaten. Dessen Mittelpunkt wird innerhalb der Zelle zufällig verschoben. Haupt- und Nebenradius, Rotation, Intensität und verlangter Randabstand sind ebenfalls seedbasiert variabel, sodass elliptische Felder unterschiedlicher Form und Dichte entstehen und das Planungsraster nicht sichtbar wird.
+
+Feldkandidaten benachbarter Zellen vergleichen stabile Prioritäten. Überlappen ihre Ausschlussradien, bleibt nur der höher priorisierte Kandidat. Zwischen akzeptierten Feldern liegen dadurch zufällige Mindestlücken von drei bis sieben Sektoren. Außerhalb der Felder besteht pro Sektor nur eine Chance von 1,8 Prozent auf einen einzelnen kleinen Kometen.
+
+Damit der feste Spielstart nicht zufällig in einer extrem langen Leerstelle liegt, besitzt die Startregion ein priorisiertes, deterministisches Entdeckungsfeld. Es beginnt außerhalb des sicheren Startsektors und liegt ungefähr zwei bis vier Sektoren in positiver X-Richtung. Der Spieler muss dadurch zunächst fliegen, findet aber nach kurzer Strecke garantiert mehrere Kometen. Das Feld verdrängt überlappende Zufallsfelder, ohne die globale Dichte außerhalb der Startregion zu erhöhen.
+
+In normalen Feldern werden `Tiny` und `Small` gemeinsam mit ungefähr 65 Prozent, `Medium` mit 25 Prozent und `Large` mit 9 Prozent gewählt. `Huge` ist aus dieser normalen Ziehung vollständig ausgeschlossen.
+
+Extrem große Kometen verwenden eine separate Seltenheitskarte. Ein Sektor darf nur dann einen solchen Körper erzeugen, wenn sein stabiler Seltenheitswert innerhalb von sechs Sektoren in jeder Richtung das lokale Maximum ist. Dadurch sind Riesen nicht von der normalen Feldwahrscheinlichkeit abhängig und zwei Riesen können niemals direkt nebeneinander entstehen. Sie erreichen Radien von 1300 bis 1800 Welteinheiten und besitzen mindestens 845 Welteinheiten bebaubaren Radius.
+
+## Überlappungsfreiheit
+
+Jeder Sektor erzeugt zunächst deterministische Kandidaten. Zur Entscheidung werden außerdem die Kandidaten seiner acht Nachbarsektoren betrachtet. Jeder Kandidat besitzt eine stabile Zufallspriorität. Überschneiden sich zwei Sicherheitsradien, bleibt ausschließlich der Kandidat mit der höheren Priorität bestehen. Die Entscheidung ist dadurch unabhängig davon, welcher Sektor zuerst geladen wurde, und funktioniert auch über Sektorgrenzen hinweg.
+
+Der Mindestabstand setzt sich aus beiden Kometenradien und `minimumCometSpacing` zusammen. Der Startpunkt des Schiffs besitzt zusätzlich eine reproduzierbare Sicherheitszone. Spätere Fabriken oder abgebaute Körper werden als gespeicherte Weltänderungen über dieses unveränderte Grundlayout gelegt.
+
+## Darstellung
+
+Godot erzeugt aus den Core-Daten pro Komet einen unregelmäßigen Polygonumriss. Zwei Wellenfrequenzen und lokales Rauschen variieren die Form, ohne den gemeinsamen Stil zu verlieren. Rauheit und Höhenvariation steuern unregelmäßige Gesteinsfelder, helle und dunkle Schichten, Kantenrippen und Rissnetze. Die Core-Kraterdaten bestimmen Lage, stark variierende Größe, Tiefe und Ausrichtung der Krater. Nahe Sektoren verwenden den detaillierten Umriss als Kollisionsfläche; entfernte Sektoren reduzieren ihn deterministisch auf zehn Punkte.
+
+Landbare Kometen besitzen ein `AsteroidSurfaceProfile` mit stabiler Surface-ID, begehbarem und bebaubarem Radius, vorgeschlagener Anzahl von Landezonen, getrennten Seeds für Terrain und Ressourcen sowie einem dauerhaften Persistenzschlüssel. Diese Daten bilden später die Grenze zwischen Weltraumansicht und begehbarer Oberfläche. Landen, Gebäudeplatzierung, Abbau und Save-Deltas sind noch nicht implementiert.
+
+## Streaming
+
+Die Präsentationsschicht hält maximal eine 5×5-Sektorfläche aktiv. Beim Schiffsflug wird deren Mittelpunkt um einen Sektor in Flugrichtung verschoben. Dadurch werden neue Inhalte deutlich außerhalb des sichtbaren Bereichs vorgeladen, während weit zurückliegende Sektoren aus dem Szenenbaum entfernt werden. Der Streamingzustand wird höchstens fünfmal pro Sekunde geprüft, nicht mit vollständiger Generierungsarbeit in jedem Frame.
+
+Beim erneuten Betreten werden dieselben Sektoren aus Seed und Koordinate neu aufgebaut. Persistente Änderungen werden später nach der Grundgenerierung als Sektordeltas angewendet.

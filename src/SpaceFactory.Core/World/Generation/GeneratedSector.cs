@@ -3,4 +3,8 @@ using SpaceFactory.Core.World.Sectors;
 
 namespace SpaceFactory.Core.World.Generation;
 
-public sealed record GeneratedSector(SectorCoordinate Coordinate, IReadOnlyList<AsteroidDefinition> Asteroids);
+public sealed record GeneratedSector(
+    SectorCoordinate Coordinate,
+    IReadOnlyList<AsteroidDefinition> Asteroids,
+    string? CometFieldId,
+    double CometFieldDensity);
