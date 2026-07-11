@@ -63,4 +63,16 @@ public sealed class InventoryTests
 
         Assert.Equal(InventoryFailure.InvalidAmount, result.Failure);
     }
+
+    [Fact]
+    public void Add_OverStackLimit_ReturnsControlledFailure()
+    {
+        var inventory = new InventoryModel(100);
+        inventory.Add(IronOre, 8, 10);
+
+        var result = inventory.Add(IronOre, 3, 10);
+
+        Assert.Equal(InventoryFailure.StackLimitExceeded, result.Failure);
+        Assert.Equal(8, inventory.GetAmount(IronOre));
+    }
 }

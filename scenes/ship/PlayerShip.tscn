@@ -16,6 +16,9 @@ scale = Vector2(0.22, 0.22)
 [node name="CollisionShape2D" type="CollisionShape2D" parent="."]
 shape = SubResource("ConvexPolygonShape2D_ship")
 
+[node name="CockpitEntryPoint" type="Marker2D" parent="."]
+position = Vector2(0, -62)
+
 [node name="Camera2D" type="Camera2D" parent="."]
 position_smoothing_enabled = true
 position_smoothing_speed = 7.0

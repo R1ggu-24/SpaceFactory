@@ -1,5 +1,6 @@
 using Godot;
 using SpaceFactory.Core.World.Sectors;
+using SpaceFactory.Presentation.Settings;
 
 namespace SpaceFactory.Presentation.UI;
 
@@ -32,9 +33,20 @@ public partial class DebugOverlay : CanvasLayer
 
     public void SetPaused(bool paused) => _pauseLabel.Visible = paused;
 
+    public void RefreshBindings() => RefreshStatus();
+
     private void RefreshStatus()
     {
         var mode = _isOnFoot ? "Zu Fuß" : "Raumschiff";
-        _sectorLabel.Text = $"Welt-Seed: {_seed}\nSektor: {_coordinate.X}, {_coordinate.Y}\nModus: {mode}\nWASD: Bewegen   F: Modus wechseln   M: Karte   Esc: Pause";
+        var movement = $"{InputBindingFormatter.FormatAction("move_up")}" +
+            $"{InputBindingFormatter.FormatAction("move_left")}" +
+            $"{InputBindingFormatter.FormatAction("move_down")}" +
+            $"{InputBindingFormatter.FormatAction("move_right")}";
+        var controls = _isOnFoot
+            ? $"{movement}: Bewegen   {InputBindingFormatter.FormatAction("use_mining_tool")}: Abbauen   " +
+              $"{InputBindingFormatter.FormatAction("enter_ship")}: Einsteigen"
+            : $"{movement}: Fliegen   {InputBindingFormatter.FormatAction("exit_ship")}: Aussteigen";
+        _sectorLabel.Text = $"Welt-Seed: {_seed}\nSektor: {_coordinate.X}, {_coordinate.Y}\nModus: {mode}\n{controls}   " +
+            $"{InputBindingFormatter.FormatAction("open_map")}: Karte   {InputBindingFormatter.FormatAction("pause")}: Einstellungen";
     }
 }

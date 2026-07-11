@@ -38,6 +38,26 @@ public sealed class Inventory
         return InventoryResult.Success();
     }
 
+    public InventoryResult Add(ItemId itemId, int amount, int maximumStackSize)
+    {
+        if (maximumStackSize <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(maximumStackSize));
+        }
+
+        if (amount <= 0)
+        {
+            return InventoryResult.Failed(InventoryFailure.InvalidAmount);
+        }
+
+        if (GetAmount(itemId) + amount > maximumStackSize)
+        {
+            return InventoryResult.Failed(InventoryFailure.StackLimitExceeded);
+        }
+
+        return Add(itemId, amount);
+    }
+
     public InventoryResult Remove(ItemId itemId, int amount)
     {
         if (amount <= 0)

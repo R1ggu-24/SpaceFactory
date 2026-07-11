@@ -1,1 +1,30 @@
-{"sectorSize":5000,"minimumAsteroidsPerSector":3,"maximumAsteroidsPerSector":12,"asteroidSizeWeights":{"Tiny":0.25,"Small":0.35,"Medium":0.25,"Large":0.12,"Huge":0.03}}
+{
+  "sectorSize": 5000,
+  "minimumAsteroidsPerSector": 0,
+  "maximumAsteroidsPerSector": 8,
+  "minimumCometSpacing": 180,
+  "fieldCellSizeInSectors": 16,
+  "fieldSpawnChance": 0.68,
+  "minimumFieldRadiusInSectors": 1.5,
+  "maximumFieldRadiusInSectors": 3.8,
+  "minimumFieldGapInSectors": 3,
+  "maximumFieldGapInSectors": 7,
+  "loneCometChancePerSector": 0.018,
+  "extremeCometSeparationInSectors": 6,
+  "enableStartingDiscoveryField": true,
+  "startingFieldCenterSectorX": 2.75,
+  "startingFieldCenterSectorY": 0.5,
+  "startingFieldMajorRadiusInSectors": 2.2,
+  "startingFieldMinorRadiusInSectors": 1.45,
+  "startingFieldIntensity": 0.85,
+  "startingSafeRadius": 900,
+  "startingSafeCenterX": 2500,
+  "startingSafeCenterY": 2500,
+  "asteroidSizeWeights": {
+    "Tiny": 0.20,
+    "Small": 0.45,
+    "Medium": 0.25,
+    "Large": 0.09,
+    "Huge": 0.01
+  }
+}
