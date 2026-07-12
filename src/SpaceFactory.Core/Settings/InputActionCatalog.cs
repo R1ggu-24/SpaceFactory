@@ -18,8 +18,7 @@ public static class InputActionCatalog
             new(GameAction.MoveLeft, "move_left", "Nach links bewegen", InputBinding.Key(InputBindingCodes.A)),
             new(GameAction.MoveRight, "move_right", "Nach rechts bewegen", InputBinding.Key(InputBindingCodes.D)),
             new(GameAction.Interact, "interact", "Interagieren", InputBinding.Key(InputBindingCodes.Q)),
-            new(GameAction.EnterShip, "enter_ship", "In das Raumschiff einsteigen", InputBinding.Key(InputBindingCodes.E)),
-            new(GameAction.ExitShip, "exit_ship", "Aus dem Raumschiff aussteigen", InputBinding.Key(InputBindingCodes.F)),
+            new(GameAction.ShipInteraction, "ship_interaction", "Raumschiff betreten / verlassen", InputBinding.Key(InputBindingCodes.E)),
             new(GameAction.OpenInventory, "inventory", "Inventar öffnen", InputBinding.Key(InputBindingCodes.I)),
             new(GameAction.OpenMap, "open_map", "Karte öffnen", InputBinding.Key(InputBindingCodes.M)),
             new(GameAction.UseMiningTool, "use_mining_tool", "Abbauwerkzeug verwenden", InputBinding.MouseButton(InputBindingCodes.LeftMouseButton)),
@@ -44,6 +43,8 @@ public static class InputActionCatalog
             });
 
     public static IReadOnlyList<InputActionDefinition> All => Definitions;
+
+    public static bool Contains(GameAction action) => DefinitionsByAction.ContainsKey(action);
 
     public static InputActionDefinition Get(GameAction action)
     {

@@ -7,6 +7,8 @@ public enum GameAction
     MoveLeft,
     MoveRight,
     Interact,
+    ShipInteraction,
+    // Retained so settings written by older builds can be migrated during normalization.
     EnterShip,
     ExitShip,
     OpenInventory,

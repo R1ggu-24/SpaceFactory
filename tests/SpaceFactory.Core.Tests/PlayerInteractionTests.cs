@@ -6,6 +6,126 @@ namespace SpaceFactory.Core.Tests;
 public sealed class PlayerInteractionTests
 {
     [Fact]
+    public void AvailableShipAction_InShip_IsExit()
+    {
+        var action = ShipInteractionRules.GetAvailableAction(
+            PlayerControlMode.Ship,
+            false,
+            false,
+            new WorldPosition(1000, 1000),
+            new WorldPosition(0, 0),
+            78);
+
+        Assert.Equal(ShipInteractionAction.ExitShip, action);
+    }
+
+    [Fact]
+    public void AvailableShipAction_OnFootInsideRange_IsEnter()
+    {
+        var action = ShipInteractionRules.GetAvailableAction(
+            PlayerControlMode.OnFoot,
+            false,
+            false,
+            new WorldPosition(77.9, 0),
+            new WorldPosition(0, 0),
+            78);
+
+        Assert.Equal(ShipInteractionAction.EnterShip, action);
+    }
+
+    [Fact]
+    public void AvailableShipAction_OnFootOutsideRange_IsNone()
+    {
+        var action = ShipInteractionRules.GetAvailableAction(
+            PlayerControlMode.OnFoot,
+            false,
+            false,
+            new WorldPosition(78.1, 0),
+            new WorldPosition(0, 0),
+            78);
+
+        Assert.Equal(ShipInteractionAction.None, action);
+    }
+
+    [Fact]
+    public void AvailableShipAction_InShipWhileUiBlocked_IsNone()
+    {
+        var action = ShipInteractionRules.GetAvailableAction(
+            PlayerControlMode.Ship,
+            false,
+            true,
+            new WorldPosition(0, 0),
+            new WorldPosition(0, 0),
+            78);
+
+        Assert.Equal(ShipInteractionAction.None, action);
+    }
+
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public void AvailableShipAction_OnFootWhileMiningOrBlocked_IsNone(bool isMining, bool isBlocked)
+    {
+        var action = ShipInteractionRules.GetAvailableAction(
+            PlayerControlMode.OnFoot,
+            isMining,
+            isBlocked,
+            new WorldPosition(0, 0),
+            new WorldPosition(0, 0),
+            78);
+
+        Assert.Equal(ShipInteractionAction.None, action);
+    }
+
+    [Fact]
+    public void ShipInteractionPressGate_HeldPressIsAcceptedOnlyOnce()
+    {
+        var gate = new ShipInteractionPressGate();
+
+        Assert.True(gate.TryPress());
+        Assert.False(gate.TryPress());
+        gate.Advance(1);
+        Assert.False(gate.TryPress());
+    }
+
+    [Fact]
+    public void ShipInteractionPressGate_RapidSecondPressIsRejected()
+    {
+        var gate = new ShipInteractionPressGate(0.25);
+
+        Assert.True(gate.TryPress());
+        gate.Release();
+        gate.Advance(0.24);
+
+        Assert.False(gate.TryPress());
+    }
+
+    [Fact]
+    public void ShipInteractionPressGate_NewPressAfterCooldownIsAccepted()
+    {
+        var gate = new ShipInteractionPressGate(0.25);
+
+        Assert.True(gate.TryPress());
+        gate.Release();
+        gate.Advance(0.25);
+
+        Assert.True(gate.TryPress());
+    }
+
+    [Fact]
+    public void ShipInteractionPressGate_ResetAfterUiChangeAllowsFreshPress()
+    {
+        var gate = new ShipInteractionPressGate();
+        Assert.True(gate.TryPress());
+
+        gate.Reset();
+
+        Assert.False(gate.IsHeld);
+        Assert.Equal(0, gate.RemainingCooldownSeconds);
+        Assert.True(gate.TryPress());
+    }
+
+    [Fact]
     public void CanEnterShip_JustInsideDistance_ReturnsTrue()
     {
         var result = ShipInteractionRules.CanEnterShip(

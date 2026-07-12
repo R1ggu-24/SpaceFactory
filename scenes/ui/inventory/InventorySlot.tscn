@@ -1,0 +1,84 @@
+[gd_scene load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scripts/presentation/inventory/InventorySlotControl.cs" id="1_slot"]
+[ext_resource type="Script" path="res://scripts/presentation/inventory/ResourceIconControl.cs" id="2_icon"]
+
+[node name="InventorySlot" type="PanelContainer"]
+custom_minimum_size = Vector2(64, 64)
+mouse_default_cursor_shape = 2
+script = ExtResource("1_slot")
+
+[node name="Margin" type="MarginContainer" parent="."]
+layout_mode = 2
+theme_override_constants/margin_left = 3
+theme_override_constants/margin_top = 3
+theme_override_constants/margin_right = 3
+theme_override_constants/margin_bottom = 3
+
+[node name="SlotContent" type="Control" parent="Margin"]
+custom_minimum_size = Vector2(56, 56)
+layout_mode = 2
+mouse_filter = 2
+
+[node name="Icon" type="Control" parent="Margin/SlotContent"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 3.0
+offset_top = 3.0
+offset_right = -3.0
+offset_bottom = -3.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+script = ExtResource("2_icon")
+
+[node name="EmptyMarker" type="Label" parent="Margin/SlotContent"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+text = "·"
+horizontal_alignment = 1
+vertical_alignment = 1
+theme_override_colors/font_color = Color(0.17, 0.42, 0.5, 0.8)
+theme_override_font_sizes/font_size = 25
+
+[node name="SlotNumber" type="Label" parent="Margin/SlotContent"]
+layout_mode = 1
+anchors_preset = 0
+offset_left = 2.0
+offset_top = 1.0
+offset_right = 26.0
+offset_bottom = 18.0
+mouse_filter = 2
+text = "01"
+theme_override_colors/font_color = Color(0.35, 0.58, 0.66, 0.65)
+theme_override_font_sizes/font_size = 9
+
+[node name="Amount" type="Label" parent="Margin/SlotContent"]
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 1.0
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = -42.0
+offset_top = -23.0
+offset_right = -2.0
+offset_bottom = -2.0
+grow_horizontal = 0
+grow_vertical = 0
+mouse_filter = 2
+text = "200"
+horizontal_alignment = 2
+vertical_alignment = 2
+theme_override_colors/font_color = Color(0.94, 0.99, 1, 1)
+theme_override_colors/font_shadow_color = Color(0, 0, 0, 1)
+theme_override_constants/shadow_offset_x = 1
+theme_override_constants/shadow_offset_y = 1
+theme_override_font_sizes/font_size = 14

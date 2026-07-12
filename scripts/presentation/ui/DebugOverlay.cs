@@ -44,8 +44,8 @@ public partial class DebugOverlay : CanvasLayer
             $"{InputBindingFormatter.FormatAction("move_right")}";
         var controls = _isOnFoot
             ? $"{movement}: Bewegen   {InputBindingFormatter.FormatAction("use_mining_tool")}: Abbauen   " +
-              $"{InputBindingFormatter.FormatAction("enter_ship")}: Einsteigen"
-            : $"{movement}: Fliegen   {InputBindingFormatter.FormatAction("exit_ship")}: Aussteigen";
+              $"{InputBindingFormatter.FormatAction("ship_interaction")}: Einsteigen"
+            : $"{movement}: Fliegen   {InputBindingFormatter.FormatAction("ship_interaction")}: Aussteigen";
         _sectorLabel.Text = $"Welt-Seed: {_seed}\nSektor: {_coordinate.X}, {_coordinate.Y}\nModus: {mode}\n{controls}   " +
             $"{InputBindingFormatter.FormatAction("open_map")}: Karte   {InputBindingFormatter.FormatAction("pause")}: Einstellungen";
     }
