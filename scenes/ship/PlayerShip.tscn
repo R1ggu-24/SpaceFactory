@@ -1,25 +1,22 @@
-[gd_scene load_steps=4 format=3]
+[gd_scene load_steps=3 format=3]
 
 [ext_resource type="Script" path="res://scripts/presentation/ship/PlayerShipController.cs" id="1"]
 [ext_resource type="Texture2D" path="res://assets/sprites/ships/player_ship.png" id="2"]
-
-[sub_resource type="ConvexPolygonShape2D" id="ConvexPolygonShape2D_ship"]
-points = PackedVector2Array(0, -130, 48, -52, 128, 66, 116, 100, 45, 88, 28, 126, 0, 138, -28, 126, -45, 88, -116, 100, -128, 66, -48, -52)
 
 [node name="PlayerShip" type="CharacterBody2D"]
 script = ExtResource("1")
 
 [node name="Sprite" type="Sprite2D" parent="."]
 texture = ExtResource("2")
-scale = Vector2(0.22, 0.22)
+scale = Vector2(0.396, 0.396)
 
-[node name="CollisionShape2D" type="CollisionShape2D" parent="."]
-shape = SubResource("ConvexPolygonShape2D_ship")
+[node name="CollisionPolygon2D" type="CollisionPolygon2D" parent="."]
+polygon = PackedVector2Array(0, -234, 86.4, -93.6, 230.4, 118.8, 208.8, 180, 81, 158.4, 50.4, 226.8, 0, 248.4, -50.4, 226.8, -81, 158.4, -208.8, 180, -230.4, 118.8, -86.4, -93.6)
 
 [node name="CockpitEntryPoint" type="Marker2D" parent="."]
-position = Vector2(0, -62)
+position = Vector2(0, -165)
 
 [node name="Camera2D" type="Camera2D" parent="."]
 position_smoothing_enabled = true
 position_smoothing_speed = 7.0
-zoom = Vector2(0.42, 0.42)
+zoom = Vector2(0.22, 0.22)

@@ -10,8 +10,7 @@ public sealed class SettingsTests
     {
         var settings = InputSettings.CreateDefault();
 
-        Assert.Equal(14, settings.Bindings.Count);
-        Assert.Equal(Enum.GetValues<GameAction>().Length, settings.Bindings.Count);
+        Assert.Equal(InputActionCatalog.All.Count, settings.Bindings.Count);
         Assert.Empty(settings.FindConflicts());
     }
 
@@ -20,8 +19,7 @@ public sealed class SettingsTests
     {
         var settings = InputSettings.CreateDefault();
 
-        Assert.Equal(InputBinding.Key(InputBindingCodes.E), settings.GetBinding(GameAction.EnterShip));
-        Assert.Equal(InputBinding.Key(InputBindingCodes.F), settings.GetBinding(GameAction.ExitShip));
+        Assert.Equal(InputBinding.Key(InputBindingCodes.E), settings.GetBinding(GameAction.ShipInteraction));
         Assert.Equal(
             InputBinding.MouseButton(InputBindingCodes.LeftMouseButton),
             settings.GetBinding(GameAction.UseMiningTool));
@@ -33,11 +31,11 @@ public sealed class SettingsTests
         var original = InputSettings.CreateDefault();
         var changed = original.WithBinding(
             GameAction.Interact,
-            original.GetBinding(GameAction.EnterShip));
+            original.GetBinding(GameAction.ShipInteraction));
 
         var conflict = Assert.Single(changed.FindConflicts());
         Assert.Equal(InputBinding.Key(InputBindingCodes.E), conflict.Binding);
-        Assert.Equal([GameAction.Interact, GameAction.EnterShip], conflict.Actions);
+        Assert.Equal([GameAction.Interact, GameAction.ShipInteraction], conflict.Actions);
         Assert.Equal(InputBinding.Key(InputBindingCodes.Q), original.GetBinding(GameAction.Interact));
     }
 
@@ -64,9 +62,25 @@ public sealed class SettingsTests
 
         var normalized = partial.Normalize();
 
-        Assert.Equal(14, normalized.Bindings.Count);
+        Assert.Equal(InputActionCatalog.All.Count, normalized.Bindings.Count);
         Assert.Equal(InputBinding.Key(InputBindingCodes.R), normalized.GetBinding(GameAction.MoveUp));
-        Assert.Equal(InputBinding.Key(InputBindingCodes.E), normalized.GetBinding(GameAction.EnterShip));
+        Assert.Equal(InputBinding.Key(InputBindingCodes.E), normalized.GetBinding(GameAction.ShipInteraction));
+    }
+
+    [Fact]
+    public void NormalizeInputSettings_MigratesLegacyEnterShipBindingAndDropsLegacyActions()
+    {
+        var legacy = new InputSettings(new Dictionary<GameAction, InputBinding>
+        {
+            [GameAction.EnterShip] = InputBinding.Key(InputBindingCodes.R),
+            [GameAction.ExitShip] = InputBinding.Key(InputBindingCodes.F),
+        });
+
+        var normalized = legacy.Normalize();
+
+        Assert.Equal(InputBinding.Key(InputBindingCodes.R), normalized.GetBinding(GameAction.ShipInteraction));
+        Assert.False(normalized.Bindings.ContainsKey(GameAction.EnterShip));
+        Assert.False(normalized.Bindings.ContainsKey(GameAction.ExitShip));
     }
 
     [Fact]

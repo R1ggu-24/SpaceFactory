@@ -10,6 +10,7 @@ public sealed class DeterministicWorldGenerator : IWorldGenerator
     private const ulong CandidateSalt = 0x434F4D45545F5631UL;
     private const ulong LoneCometSalt = 0x4C4F4E455F5631UL;
     private const ulong ExtremeCometSalt = 0x45585452454D455FUL;
+    private const ulong ExtremeCandidateSalt = 0x485547455F5631UL;
     private static readonly CometFieldPlanner FieldPlanner = new();
 
     public GeneratedSector Generate(SectorGenerationRequest request)
@@ -71,7 +72,16 @@ public sealed class DeterministicWorldGenerator : IWorldGenerator
 
         if (hasExtremeComet)
         {
-            candidates.Add(CreateCandidate(request, coordinate, normalCount, AsteroidSize.Huge, random));
+            var extremeRandom = new SplitMix64(HashSector(
+                request.Seed.Value,
+                coordinate,
+                request.Salt ^ ExtremeCandidateSalt));
+            candidates.Add(CreateCandidate(
+                request,
+                coordinate,
+                request.Settings.MaximumAsteroidsPerSector,
+                AsteroidSize.Huge,
+                extremeRandom));
         }
 
         return candidates;

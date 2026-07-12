@@ -15,7 +15,8 @@ public partial class ResourceDepositView : Area2D
     private int _remainingAmount;
     private int _sectorX;
     private int _sectorY;
-    private float _miningVisualProgress;
+    private int _visibleDamageCrackCount;
+    private bool _interactionActive = true;
 
     public string DepositId => _deposit.Id;
     public string DisplayName => _resource.DisplayName;
@@ -51,6 +52,8 @@ public partial class ResourceDepositView : Area2D
             (float)deposit.NormalizedPosition.Y * cometRadius);
         CollisionLayer = ResourceCollisionLayer;
         CollisionMask = 0;
+        Monitoring = false;
+        Monitorable = true;
         InputPickable = true;
     }
 
@@ -72,8 +75,28 @@ public partial class ResourceDepositView : Area2D
 
     public void SetMiningProgress(float progress)
     {
-        _miningVisualProgress = Mathf.Clamp(progress, 0, 1);
+        var clampedProgress = Mathf.Clamp(progress, 0, 1);
+        var crackCount = GetDamageCrackCount(clampedProgress);
+        if (crackCount == _visibleDamageCrackCount)
+        {
+            return;
+        }
+
+        _visibleDamageCrackCount = crackCount;
         QueueRedraw();
+    }
+
+    public void SetInteractionActive(bool active)
+    {
+        if (_interactionActive == active || IsExhausted)
+        {
+            return;
+        }
+
+        _interactionActive = active;
+        CollisionLayer = active ? ResourceCollisionLayer : 0;
+        Monitorable = active;
+        InputPickable = active;
     }
 
     public void RequestMiningAudioCue()
@@ -105,7 +128,10 @@ public partial class ResourceDepositView : Area2D
     public override void _Draw()
     {
         var random = new RandomNumberGenerator { Seed = _deposit.VisualSeed };
-        DrawCircle(Vector2.Zero, _radius * 1.08f, new Color(0.06f, 0.055f, 0.05f, 0.82f));
+        var hostRock = CreatePatch(Vector2.Zero, _radius * 1.08f, random);
+        DrawColoredPolygon(hostRock, new Color(0.06f, 0.055f, 0.05f, 0.88f));
+        DrawPolyline([.. hostRock, hostRock[0]], new Color(0.015f, 0.014f, 0.013f, 0.92f),
+            Mathf.Max(1, _radius * 0.055f), true);
         switch (_resource.VisualStyle)
         {
             case ResourceVisualStyle.Vein:
@@ -125,11 +151,12 @@ public partial class ResourceDepositView : Area2D
                 break;
         }
 
-        if (_miningVisualProgress > 0)
+        DrawSurfaceHighlights(random);
+
+        if (_visibleDamageCrackCount > 0)
         {
             var damageColor = new Color(0.04f, 0.035f, 0.03f, 0.9f);
-            var crackCount = 2 + Mathf.RoundToInt(_miningVisualProgress * 7);
-            for (var index = 0; index < crackCount; index++)
+            for (var index = 0; index < _visibleDamageCrackCount; index++)
             {
                 var direction = Vector2.FromAngle(random.RandfRange(0, Mathf.Tau));
                 DrawLine(Vector2.Zero, direction * _radius * random.RandfRange(0.3f, 0.95f),
@@ -137,6 +164,24 @@ public partial class ResourceDepositView : Area2D
             }
         }
     }
+
+    private void DrawSurfaceHighlights(RandomNumberGenerator random)
+    {
+        for (var index = 0; index < 4; index++)
+        {
+            var center = Vector2.FromAngle(random.RandfRange(0, Mathf.Tau)) *
+                random.RandfRange(_radius * 0.18f, _radius * 0.72f);
+            var radius = Mathf.Max(0.75f, random.RandfRange(_radius * 0.025f, _radius * 0.065f));
+            DrawCircle(center + new Vector2(radius * 0.5f, radius * 0.7f), radius * 1.15f,
+                new Color(0.01f, 0.012f, 0.014f, 0.48f));
+            DrawCircle(center, radius,
+                new Color(_color.Lightened(random.RandfRange(0.28f, 0.52f)), 0.78f));
+        }
+    }
+
+    private static int GetDamageCrackCount(float progress) => progress <= 0
+        ? 0
+        : 2 + Mathf.RoundToInt(progress * 7);
 
     private void DrawVeins(RandomNumberGenerator random)
     {

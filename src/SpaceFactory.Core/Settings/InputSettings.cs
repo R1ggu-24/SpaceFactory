@@ -48,7 +48,7 @@ public sealed record InputSettings
 
     public InputSettings WithBinding(GameAction action, InputBinding binding)
     {
-        if (!Enum.IsDefined(action))
+        if (!InputActionCatalog.Contains(action))
         {
             throw new ArgumentOutOfRangeException(nameof(action), action, "The game action is invalid.");
         }
@@ -67,9 +67,15 @@ public sealed record InputSettings
             definition => definition.Action,
             definition => definition.DefaultBinding);
 
-        foreach (var (action, binding) in _bindings)
+        foreach (var (action, binding) in _bindings.Where(pair => normalized.ContainsKey(pair.Key)))
         {
             normalized[action] = binding;
+        }
+
+        if (!_bindings.ContainsKey(GameAction.ShipInteraction) &&
+            _bindings.TryGetValue(GameAction.EnterShip, out var legacyShipBinding))
+        {
+            normalized[GameAction.ShipInteraction] = legacyShipBinding;
         }
 
         return new InputSettings(normalized);
@@ -77,6 +83,7 @@ public sealed record InputSettings
 
     public IReadOnlyList<BindingConflict> FindConflicts() =>
         _bindings
+            .Where(pair => InputActionCatalog.Contains(pair.Key))
             .Select(pair => (Action: pair.Key, Binding: pair.Value))
             .Concat(InputActionCatalog.All.SelectMany(definition =>
                 InputActionCatalog.GetPermanentBindings(definition.Action)

@@ -84,13 +84,13 @@ public partial class ResourceHud : CanvasLayer
         _messageRemaining = seconds;
     }
 
-    public void UpdateInventory(Inventory inventory, IReadOnlyList<ResourceDefinition> resources)
+    public void UpdateInventory(SlotInventory inventory, IReadOnlyList<ResourceDefinition> resources)
     {
         var lines = resources
             .Select(resource => (Resource: resource, Amount: inventory.GetAmount(resource.Id)))
             .Where(entry => entry.Amount > 0)
             .OrderBy(entry => entry.Resource.DisplayName)
-            .Select(entry => $"{entry.Resource.DisplayName}: {entry.Amount}/{entry.Resource.MaximumStackSize}")
+            .Select(entry => $"{entry.Resource.DisplayName}: {entry.Amount}/{inventory.MaximumStackSize}")
             .ToArray();
         _inventory.Text = lines.Length == 0
             ? $"Leer\nKapazität: {inventory.UsedCapacity}/{inventory.Capacity}"

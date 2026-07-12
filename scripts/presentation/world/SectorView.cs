@@ -8,7 +8,9 @@ namespace SpaceFactory.Presentation.World;
 public partial class SectorView : Node2D
 {
     private readonly List<AsteroidView> _cometViews = [];
+    private readonly List<ResourceDepositView> _resourceViews = [];
     private readonly ResourceDepositGenerator _resourceGenerator = new();
+    private bool? _detailedCollisions;
 
     public void Display(
         GeneratedSector sector,
@@ -46,6 +48,7 @@ public partial class SectorView : Node2D
                     sector.Coordinate.X,
                     sector.Coordinate.Y,
                     resourceStateStore);
+                _resourceViews.Add(depositView);
                 view.AddChild(depositView);
             }
         }
@@ -55,9 +58,27 @@ public partial class SectorView : Node2D
 
     public void SetDetailedCollisions(bool detailed)
     {
+        if (_detailedCollisions == detailed)
+        {
+            return;
+        }
+
+        _detailedCollisions = detailed;
         foreach (var comet in _cometViews)
         {
             comet.SetDetailedCollision(detailed);
+        }
+
+        for (var index = _resourceViews.Count - 1; index >= 0; index--)
+        {
+            var resource = _resourceViews[index];
+            if (!GodotObject.IsInstanceValid(resource))
+            {
+                _resourceViews.RemoveAt(index);
+                continue;
+            }
+
+            resource.SetInteractionActive(detailed);
         }
     }
 }

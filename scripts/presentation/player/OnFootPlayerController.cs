@@ -27,16 +27,21 @@ public partial class OnFootPlayerController : CharacterBody2D
     public float MiningRange { get; set; } = 210.0f;
 
     private Area2D _cursorProbe = null!;
+    private Sprite2D _astronautSprite = null!;
     private Node2D _miningTool = null!;
     private Marker2D _miningMuzzle = null!;
     private Vector2 _toolRestPosition;
-    private Inventory _inventory = null!;
+    private SlotInventory _inventory = null!;
     private IReadOnlyList<ResourceDefinition> _resources = [];
     private ResourceHud _hud = null!;
     private Func<bool> _isUiBlocking = static () => false;
     private ResourceDepositView? _miningTarget;
     private readonly MiningSession _miningSession = new();
     private float _toolPulse;
+    private float _walkPhase;
+    private Vector2 _spriteRestPosition;
+    private Vector2 _spriteRestScale;
+    private Tween? _visibilityTween;
 
     public bool IsControlActive { get; private set; }
     public OnFootActionState ActionState { get; private set; } = OnFootActionState.Exploring;
@@ -44,6 +49,9 @@ public partial class OnFootPlayerController : CharacterBody2D
 
     public override void _Ready()
     {
+        _astronautSprite = GetNode<Sprite2D>("Sprite");
+        _spriteRestPosition = _astronautSprite.Position;
+        _spriteRestScale = _astronautSprite.Scale;
         _miningTool = GetNode<Node2D>("MiningTool");
         _miningMuzzle = GetNode<Marker2D>("MiningTool/Muzzle");
         _toolRestPosition = _miningTool.Position;
@@ -63,7 +71,7 @@ public partial class OnFootPlayerController : CharacterBody2D
     }
 
     public void Initialize(
-        Inventory inventory,
+        SlotInventory inventory,
         IReadOnlyList<ResourceDefinition> resources,
         ResourceHud hud,
         Func<bool> isUiBlocking)
@@ -149,12 +157,13 @@ public partial class OnFootPlayerController : CharacterBody2D
         }
 
         IsControlActive = active;
-        Visible = active;
+        AnimateVisibility(active);
         SetCollisionActive(active);
         GetNode<Camera2D>("Camera2D").Enabled = active;
         if (!active)
         {
             Velocity = Vector2.Zero;
+            UpdateMovementAnimation(0, false);
         }
     }
 
@@ -219,10 +228,7 @@ public partial class OnFootPlayerController : CharacterBody2D
             return;
         }
 
-        var addResult = _inventory.Add(
-            target.Resource.Id,
-            target.YieldAmount,
-            target.Resource.MaximumStackSize);
+        var addResult = _inventory.Add(target.Resource.Id, target.YieldAmount);
         if (!addResult.Succeeded)
         {
             _hud.ShowMessage("Inventar voll – Abbau abgebrochen");
@@ -264,6 +270,7 @@ public partial class OnFootPlayerController : CharacterBody2D
         var velocityChange = direction.LengthSquared() > 0.01f ? Acceleration : Deceleration;
         Velocity = Velocity.MoveToward(targetVelocity, velocityChange * delta);
         MoveAndSlide();
+        UpdateMovementAnimation(delta, direction.LengthSquared() > 0.01f);
 
         if (direction.LengthSquared() > 0.01f)
         {
@@ -276,6 +283,56 @@ public partial class OnFootPlayerController : CharacterBody2D
     {
         Velocity = Velocity.MoveToward(Vector2.Zero, Deceleration * delta);
         MoveAndSlide();
+        UpdateMovementAnimation(delta, false);
+    }
+
+    private void UpdateMovementAnimation(float delta, bool isMoving)
+    {
+        if (delta <= 0)
+        {
+            _astronautSprite.Position = _spriteRestPosition;
+            _astronautSprite.Scale = _spriteRestScale;
+            return;
+        }
+
+        if (isMoving)
+        {
+            _walkPhase += delta * 9.5f;
+            var step = Mathf.Sin(_walkPhase);
+            _astronautSprite.Position = _spriteRestPosition + new Vector2(0, step * 1.15f);
+            var compression = Mathf.Cos(_walkPhase * 2) * 0.012f;
+            _astronautSprite.Scale = _spriteRestScale * new Vector2(1 + compression, 1 - compression);
+            return;
+        }
+
+        _astronautSprite.Position = _astronautSprite.Position.Lerp(_spriteRestPosition, Mathf.Clamp(delta * 12, 0, 1));
+        _astronautSprite.Scale = _astronautSprite.Scale.Lerp(_spriteRestScale, Mathf.Clamp(delta * 12, 0, 1));
+    }
+
+    private void AnimateVisibility(bool active)
+    {
+        _visibilityTween?.Kill();
+        if (active)
+        {
+            Visible = true;
+            Modulate = new Color(1, 1, 1, 0);
+            _visibilityTween = CreateTween();
+            _visibilityTween.TweenProperty(this, new NodePath("modulate"), Colors.White, 0.16)
+                .SetEase(Tween.EaseType.Out);
+            return;
+        }
+
+        _visibilityTween = CreateTween();
+        _visibilityTween.TweenProperty(this, new NodePath("modulate"), new Color(1, 1, 1, 0), 0.12)
+            .SetEase(Tween.EaseType.In);
+        _visibilityTween.TweenCallback(Callable.From(() =>
+        {
+            if (!IsControlActive)
+            {
+                Visible = false;
+                Modulate = Colors.White;
+            }
+        }));
     }
 
     private void UpdateMiningToolPose()

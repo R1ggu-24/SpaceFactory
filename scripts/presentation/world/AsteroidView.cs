@@ -37,6 +37,11 @@ public partial class AsteroidView : StaticBody2D
 
     public void SetDetailedCollision(bool detailed)
     {
+        if (_useDetailedCollision == detailed)
+        {
+            return;
+        }
+
         _useDetailedCollision = detailed;
         if (_collision is not null)
         {
@@ -70,6 +75,7 @@ public partial class AsteroidView : StaticBody2D
         if ((int)GraphicsQualityRuntime.TextureQuality >= (int)QualityLevel.High)
         {
             DrawSurfaceGrain();
+            DrawMicroCraters();
         }
 
         DrawCraters();
@@ -166,6 +172,27 @@ public partial class AsteroidView : StaticBody2D
                 : _baseColor.Darkened(random.RandfRange(0.12f, 0.30f));
             var grain = CreateRockPatch(center, grainRadius, random, 4, 7);
             DrawColoredPolygon(grain, new Color(color, random.RandfRange(0.45f, 0.82f)));
+        }
+    }
+
+    private void DrawMicroCraters()
+    {
+        var random = new RandomNumberGenerator { Seed = _definition.VisualSeed ^ 0x504954535F5631UL };
+        var pitCount = 5 + Mathf.RoundToInt((float)_definition.SurfaceRoughness * 10);
+        for (var index = 0; index < pitCount; index++)
+        {
+            var angle = random.RandfRange(0, Mathf.Tau);
+            var distance = Mathf.Sqrt(random.Randf()) * (float)_definition.Radius * 0.67f;
+            var center = Vector2.FromAngle(angle) * distance;
+            var radius = Mathf.Max(0.8f,
+                random.RandfRange(0.008f, 0.028f) * (float)_definition.Radius);
+            var depth = random.RandfRange(0.14f, 0.34f);
+
+            DrawSetTransform(center, random.RandfRange(0, Mathf.Tau),
+                new Vector2(random.RandfRange(0.78f, 1.25f), random.RandfRange(0.58f, 0.9f)));
+            DrawCircle(Vector2.Zero, radius * 1.14f, _baseColor.Lightened(depth * 0.42f));
+            DrawCircle(-LightDirection * radius * 0.12f, radius, _baseColor.Darkened(depth));
+            DrawSetTransform(Vector2.Zero, 0, Vector2.One);
         }
     }
 

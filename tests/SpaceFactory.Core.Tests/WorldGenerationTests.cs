@@ -227,6 +227,23 @@ public sealed class WorldGenerationTests
     }
 
     [Fact]
+    public void Generate_SlightDensityIncreasePreservesExtremeCometMap()
+    {
+        var baseline = GenerateDensitySample(0.68, 0.018);
+        var increased = GenerateDensitySample(0.76, 0.020);
+
+        Assert.Equal(470, baseline.CometCount);
+        Assert.Equal(491, increased.CometCount);
+        var increase = (increased.CometCount - baseline.CometCount) / (double)baseline.CometCount;
+        // Candidate probabilities rise by about 11%; placement spacing and field
+        // conflict resolution deliberately keep the accepted-comet increase smaller.
+        Assert.InRange(increase, 0.03, 0.08);
+        Assert.Equal(
+            JsonSerializer.Serialize(baseline.ExtremeComets),
+            JsonSerializer.Serialize(increased.ExtremeComets));
+    }
+
+    [Fact]
     public void Generate_LandableCometsHaveStableSurfaceMetadata()
     {
         var comets = GenerateRegion(741029384, -15, 15)
@@ -271,6 +288,33 @@ public sealed class WorldGenerationTests
         return sectors;
     }
 
+    private DensitySample GenerateDensitySample(double fieldSpawnChance, double loneCometChance)
+    {
+        var cometCount = 0;
+        var extremeComets = new List<string>();
+        foreach (var seed in new long[] { 31, 741029384, 991827 })
+        {
+            for (var y = -20; y <= 20; y++)
+            {
+                for (var x = -20; x <= 20; x++)
+                {
+                    var sector = _generator.Generate(Request(
+                        seed,
+                        x,
+                        y,
+                        fieldSpawnChance,
+                        loneCometChance));
+                    cometCount += sector.Asteroids.Count;
+                    extremeComets.AddRange(sector.Asteroids
+                        .Where(comet => comet.Size == AsteroidSize.Huge)
+                        .Select(comet => $"{sector.Coordinate.X}:{sector.Coordinate.Y}:{JsonSerializer.Serialize(comet)}"));
+                }
+            }
+        }
+
+        return new DensitySample(cometCount, extremeComets);
+    }
+
     private static IEnumerable<GlobalComet> ToGlobalComets(GeneratedSector sector) =>
         sector.Asteroids.Select(comet => new GlobalComet(
             comet.Id,
@@ -278,7 +322,12 @@ public sealed class WorldGenerationTests
             (sector.Coordinate.Y * SectorSize) + comet.Position.Y,
             comet.Radius));
 
-    internal static SectorGenerationRequest Request(long seed, int x, int y) => new(
+    internal static SectorGenerationRequest Request(
+        long seed,
+        int x,
+        int y,
+        double fieldSpawnChance = WorldGenerationDefaults.FieldSpawnChance,
+        double loneCometChance = WorldGenerationDefaults.LoneCometChancePerSector) => new(
         new WorldSeed(seed),
         new SectorCoordinate(x, y),
         new WorldGenerationSettings(
@@ -295,12 +344,12 @@ public sealed class WorldGenerationTests
             },
             MinimumCometSpacing: MinimumSpacing,
             FieldCellSizeInSectors: 16,
-            FieldSpawnChance: 0.68,
+            FieldSpawnChance: fieldSpawnChance,
             MinimumFieldRadiusInSectors: 1.5,
             MaximumFieldRadiusInSectors: 3.8,
             MinimumFieldGapInSectors: 3,
             MaximumFieldGapInSectors: 7,
-            LoneCometChancePerSector: 0.018,
+            LoneCometChancePerSector: loneCometChance,
             ExtremeCometSeparationInSectors: 6,
             EnableStartingDiscoveryField: true,
             StartingFieldCenterSectorX: 2.75,
@@ -313,4 +362,6 @@ public sealed class WorldGenerationTests
             StartingSafeCenterY: 2500));
 
     private sealed record GlobalComet(string Id, double X, double Y, double Radius);
+
+    private sealed record DensitySample(int CometCount, IReadOnlyList<string> ExtremeComets);
 }
