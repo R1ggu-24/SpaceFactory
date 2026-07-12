@@ -41,6 +41,20 @@ Beim ersten Start der projektlokalen .NET CLI meldete das SDK außerdem die Erst
 
 ## Befehle mit lokalen Werkzeugen
 
+Am einfachsten startet man das Spiel im Projektordner mit:
+
+```powershell
+.\Start-SpaceFactory.cmd
+```
+
+Der Launcher setzt `DOTNET_ROOT`, baut die Lösung und startet die richtige Godot-.NET-Version. Für den Editor:
+
+```powershell
+.\Start-SpaceFactory.cmd -Editor
+```
+
+Manuell sind dieselben Schritte möglich:
+
 ```powershell
 $dotnet = ".\.tools\dotnet\dotnet.exe"
 $godot = Get-ChildItem .\.tools\godot -Filter "Godot*mono*.exe" -Recurse | Select-Object -First 1

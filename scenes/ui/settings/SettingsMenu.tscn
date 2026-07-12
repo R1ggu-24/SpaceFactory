@@ -1,0 +1,168 @@
+[gd_scene load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scripts/presentation/settings/SettingsMenuController.cs" id="1_controller"]
+[ext_resource type="Script" path="res://scripts/presentation/settings/SciFiSettingsBackdrop.cs" id="2_backdrop"]
+
+[node name="SettingsMenu" type="CanvasLayer"]
+layer = 100
+process_mode = 3
+visible = false
+script = ExtResource("1_controller")
+
+[node name="Backdrop" type="Control" parent="."]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+script = ExtResource("2_backdrop")
+
+[node name="SafeArea" type="MarginContainer" parent="."]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 34.0
+offset_top = 28.0
+offset_right = -34.0
+offset_bottom = -28.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/margin_left = 18
+theme_override_constants/margin_top = 12
+theme_override_constants/margin_right = 18
+theme_override_constants/margin_bottom = 12
+
+[node name="Frame" type="PanelContainer" parent="SafeArea"]
+layout_mode = 2
+
+[node name="FrameMargin" type="MarginContainer" parent="SafeArea/Frame"]
+layout_mode = 2
+theme_override_constants/margin_left = 52
+theme_override_constants/margin_top = 24
+theme_override_constants/margin_right = 52
+theme_override_constants/margin_bottom = 24
+
+[node name="Layout" type="VBoxContainer" parent="SafeArea/Frame/FrameMargin"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="Header" type="HBoxContainer" parent="SafeArea/Frame/FrameMargin/Layout"]
+layout_mode = 2
+theme_override_constants/separation = 18
+
+[node name="Title" type="Label" parent="SafeArea/Frame/FrameMargin/Layout/Header"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "EINSTELLUNGEN"
+theme_override_colors/font_color = Color(0.91, 0.97, 1, 1)
+theme_override_colors/font_shadow_color = Color(0, 0.64, 0.9, 0.55)
+theme_override_constants/shadow_offset_x = 2
+theme_override_constants/shadow_offset_y = 2
+theme_override_font_sizes/font_size = 38
+
+[node name="Section" type="Label" parent="SafeArea/Frame/FrameMargin/Layout/Header"]
+layout_mode = 2
+text = "HAUPTMENÜ"
+horizontal_alignment = 2
+vertical_alignment = 1
+theme_override_colors/font_color = Color(0.18, 0.78, 1, 0.9)
+theme_override_font_sizes/font_size = 16
+
+[node name="HeaderLine" type="HSeparator" parent="SafeArea/Frame/FrameMargin/Layout"]
+layout_mode = 2
+
+[node name="Scroll" type="ScrollContainer" parent="SafeArea/Frame/FrameMargin/Layout"]
+custom_minimum_size = Vector2(0, 475)
+layout_mode = 2
+size_flags_vertical = 3
+horizontal_scroll_mode = 0
+
+[node name="Content" type="VBoxContainer" parent="SafeArea/Frame/FrameMargin/Layout/Scroll"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 10
+
+[node name="FooterLine" type="HSeparator" parent="SafeArea/Frame/FrameMargin/Layout"]
+layout_mode = 2
+
+[node name="Footer" type="HBoxContainer" parent="SafeArea/Frame/FrameMargin/Layout"]
+layout_mode = 2
+
+[node name="Status" type="Label" parent="SafeArea/Frame/FrameMargin/Layout/Footer"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Bereit"
+theme_override_colors/font_color = Color(0.26, 0.8, 0.94, 0.9)
+theme_override_font_sizes/font_size = 14
+
+[node name="Hint" type="Label" parent="SafeArea/Frame/FrameMargin/Layout/Footer"]
+layout_mode = 2
+text = "WASD / PFEILE  Navigation    ENTER  Auswählen    ESC  Zurück"
+horizontal_alignment = 2
+theme_override_colors/font_color = Color(0.55, 0.67, 0.73, 1)
+theme_override_font_sizes/font_size = 13
+
+[node name="ModalShade" type="ColorRect" parent="."]
+visible = false
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 0
+color = Color(0, 0.01, 0.018, 0.86)
+
+[node name="ModalCenter" type="CenterContainer" parent="ModalShade"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="ModalPanel" type="PanelContainer" parent="ModalShade/ModalCenter"]
+custom_minimum_size = Vector2(600, 285)
+layout_mode = 2
+
+[node name="Margin" type="MarginContainer" parent="ModalShade/ModalCenter/ModalPanel"]
+layout_mode = 2
+theme_override_constants/margin_left = 32
+theme_override_constants/margin_top = 26
+theme_override_constants/margin_right = 32
+theme_override_constants/margin_bottom = 26
+
+[node name="Content" type="VBoxContainer" parent="ModalShade/ModalCenter/ModalPanel/Margin"]
+layout_mode = 2
+theme_override_constants/separation = 18
+
+[node name="Title" type="Label" parent="ModalShade/ModalCenter/ModalPanel/Margin/Content"]
+layout_mode = 2
+text = "BESTÄTIGEN"
+horizontal_alignment = 1
+theme_override_colors/font_color = Color(0.3, 0.86, 1, 1)
+theme_override_font_sizes/font_size = 27
+
+[node name="Message" type="Label" parent="ModalShade/ModalCenter/ModalPanel/Margin/Content"]
+layout_mode = 2
+size_flags_vertical = 3
+text = "Möchtest du fortfahren?"
+horizontal_alignment = 1
+vertical_alignment = 1
+autowrap_mode = 2
+theme_override_font_sizes/font_size = 18
+
+[node name="Countdown" type="Label" parent="ModalShade/ModalCenter/ModalPanel/Margin/Content"]
+layout_mode = 2
+text = ""
+horizontal_alignment = 1
+theme_override_colors/font_color = Color(1, 0.75, 0.28, 1)
+theme_override_font_sizes/font_size = 16
+
+[node name="Actions" type="HBoxContainer" parent="ModalShade/ModalCenter/ModalPanel/Margin/Content"]
+layout_mode = 2
+alignment = 1
+theme_override_constants/separation = 16
