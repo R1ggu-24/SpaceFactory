@@ -68,6 +68,41 @@ theme_override_font_sizes/font_size = 19
 text = "Leer"
 autowrap_mode = 2
 
+[node name="FuelPanel" type="PanelContainer" parent="."]
+visible = false
+anchors_preset = 3
+anchor_top = 1.0
+anchor_right = 0.0
+anchor_bottom = 1.0
+offset_left = 22.0
+offset_top = -126.0
+offset_right = 252.0
+offset_bottom = -22.0
+grow_vertical = 0
+
+[node name="Content" type="VBoxContainer" parent="FuelPanel"]
+theme_override_constants/separation = 3
+
+[node name="Title" type="Label" parent="FuelPanel/Content"]
+text = "TREIBSTOFF"
+theme_override_colors/font_color = Color(0.36, 0.84, 1, 1)
+theme_override_font_sizes/font_size = 14
+
+[node name="FuelProgress" type="ProgressBar" parent="FuelPanel/Content"]
+custom_minimum_size = Vector2(210, 12)
+max_value = 1800.0
+value = 1800.0
+show_percentage = false
+
+[node name="FuelAmount" type="Label" parent="FuelPanel/Content"]
+text = "1800 / 1800"
+theme_override_font_sizes/font_size = 14
+
+[node name="FuelTime" type="Label" parent="FuelPanel/Content"]
+text = "Boostzeit 30:00"
+theme_override_colors/font_color = Color(0.62, 0.72, 0.78, 1)
+theme_override_font_sizes/font_size = 12
+
 [node name="Message" type="Label" parent="."]
 anchors_preset = 8
 anchor_left = 0.5

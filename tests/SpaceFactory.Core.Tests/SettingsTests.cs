@@ -20,6 +20,9 @@ public sealed class SettingsTests
         var settings = InputSettings.CreateDefault();
 
         Assert.Equal(InputBinding.Key(InputBindingCodes.E), settings.GetBinding(GameAction.ShipInteraction));
+        Assert.Equal(InputBinding.Key(InputBindingCodes.Shift), settings.GetBinding(GameAction.ShipBoost));
+        Assert.Equal(InputBinding.Key(InputBindingCodes.H), settings.GetBinding(GameAction.ShipDocking));
+        Assert.Equal(InputBinding.Key(InputBindingCodes.B), settings.GetBinding(GameAction.OpenBuildMenu));
         Assert.Equal(
             InputBinding.MouseButton(InputBindingCodes.LeftMouseButton),
             settings.GetBinding(GameAction.UseMiningTool));
@@ -65,6 +68,44 @@ public sealed class SettingsTests
         Assert.Equal(InputActionCatalog.All.Count, normalized.Bindings.Count);
         Assert.Equal(InputBinding.Key(InputBindingCodes.R), normalized.GetBinding(GameAction.MoveUp));
         Assert.Equal(InputBinding.Key(InputBindingCodes.E), normalized.GetBinding(GameAction.ShipInteraction));
+        Assert.Equal(InputBinding.Key(InputBindingCodes.Shift), normalized.GetBinding(GameAction.ShipBoost));
+        Assert.Equal(InputBinding.Key(InputBindingCodes.H), normalized.GetBinding(GameAction.ShipDocking));
+        Assert.Equal(InputBinding.Key(InputBindingCodes.B), normalized.GetBinding(GameAction.OpenBuildMenu));
+    }
+
+    [Fact]
+    public void ShipDockingAction_UsesConfigurableGodotInputMapEntry()
+    {
+        var definition = InputActionCatalog.Get(GameAction.ShipDocking);
+
+        Assert.Equal("ship_docking", definition.InputMapAction);
+        Assert.Equal("Am Kometen befestigen / Vom Kometen lösen", definition.DisplayName);
+        Assert.Equal(InputBinding.Key(InputBindingCodes.H), definition.DefaultBinding);
+
+        var rebound = InputSettings.CreateDefault().WithBinding(
+            GameAction.ShipDocking,
+            InputBinding.Key(InputBindingCodes.F));
+
+        Assert.Equal(InputBinding.Key(InputBindingCodes.F), rebound.GetBinding(GameAction.ShipDocking));
+        Assert.Empty(rebound.FindConflicts());
+    }
+
+    [Fact]
+    public void OpenBuildMenuAction_UsesConfigurableConflictFreeGodotInputMapEntry()
+    {
+        var definition = InputActionCatalog.Get(GameAction.OpenBuildMenu);
+
+        Assert.Equal("build_menu", definition.InputMapAction);
+        Assert.Equal("Baumenü öffnen", definition.DisplayName);
+        Assert.Equal(InputBinding.Key(InputBindingCodes.B), definition.DefaultBinding);
+        Assert.DoesNotContain(InputActionCatalog.All, item => item.Action == GameAction.Build);
+
+        var rebound = InputSettings.CreateDefault().WithBinding(
+            GameAction.OpenBuildMenu,
+            InputBinding.Key(InputBindingCodes.F));
+
+        Assert.Equal(InputBinding.Key(InputBindingCodes.F), rebound.GetBinding(GameAction.OpenBuildMenu));
+        Assert.Empty(rebound.FindConflicts());
     }
 
     [Fact]
@@ -81,6 +122,21 @@ public sealed class SettingsTests
         Assert.Equal(InputBinding.Key(InputBindingCodes.R), normalized.GetBinding(GameAction.ShipInteraction));
         Assert.False(normalized.Bindings.ContainsKey(GameAction.EnterShip));
         Assert.False(normalized.Bindings.ContainsKey(GameAction.ExitShip));
+    }
+
+    [Fact]
+    public void NormalizeInputSettings_MigratesLegacyBuildBindingAndDropsLegacyAction()
+    {
+        var legacy = new InputSettings(new Dictionary<GameAction, InputBinding>
+        {
+            [GameAction.Build] = InputBinding.Key(InputBindingCodes.F),
+        });
+
+        var normalized = legacy.Normalize();
+
+        Assert.Equal(InputBinding.Key(InputBindingCodes.F), normalized.GetBinding(GameAction.OpenBuildMenu));
+        Assert.False(normalized.Bindings.ContainsKey(GameAction.Build));
+        Assert.Empty(normalized.FindConflicts());
     }
 
     [Fact]

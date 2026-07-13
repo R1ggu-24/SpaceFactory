@@ -19,10 +19,12 @@ public static class InputActionCatalog
             new(GameAction.MoveRight, "move_right", "Nach rechts bewegen", InputBinding.Key(InputBindingCodes.D)),
             new(GameAction.Interact, "interact", "Interagieren", InputBinding.Key(InputBindingCodes.Q)),
             new(GameAction.ShipInteraction, "ship_interaction", "Raumschiff betreten / verlassen", InputBinding.Key(InputBindingCodes.E)),
+            new(GameAction.ShipBoost, "ship_boost", "Raumschiff-Boost", InputBinding.Key(InputBindingCodes.Shift)),
+            new(GameAction.ShipDocking, "ship_docking", "Am Kometen befestigen / Vom Kometen lösen", InputBinding.Key(InputBindingCodes.H)),
             new(GameAction.OpenInventory, "inventory", "Inventar öffnen", InputBinding.Key(InputBindingCodes.I)),
             new(GameAction.OpenMap, "open_map", "Karte öffnen", InputBinding.Key(InputBindingCodes.M)),
+            new(GameAction.OpenBuildMenu, "build_menu", "Baumenü öffnen", InputBinding.Key(InputBindingCodes.B)),
             new(GameAction.UseMiningTool, "use_mining_tool", "Abbauwerkzeug verwenden", InputBinding.MouseButton(InputBindingCodes.LeftMouseButton)),
-            new(GameAction.Build, "build_mode", "Bauen", InputBinding.Key(InputBindingCodes.B)),
             new(GameAction.RotateBuilding, "rotate_building", "Gebäude drehen", InputBinding.Key(InputBindingCodes.R)),
             new(GameAction.CancelAction, "cancel_action", "Aktion abbrechen", InputBinding.Key(InputBindingCodes.X)),
             new(GameAction.OpenPauseMenu, "pause", "Pausemenü öffnen", InputBinding.Key(InputBindingCodes.Escape))

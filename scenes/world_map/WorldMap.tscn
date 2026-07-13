@@ -1,6 +1,73 @@
-[gd_scene load_steps=2 format=3]
+[gd_scene load_steps=12 format=3]
 
-[ext_resource type="Script" path="res://scripts/presentation/world_map/WorldMapController.cs" id="1"]
+[ext_resource type="Script" path="res://scripts/presentation/world_map/WorldMapController.cs" id="1_controller"]
+[ext_resource type="Script" path="res://scripts/presentation/world_map/CircularMinimapControl.cs" id="2_minimap"]
+[ext_resource type="Script" path="res://scripts/presentation/world_map/WorldMapCanvas.cs" id="3_canvas"]
+[ext_resource type="Script" path="res://scripts/presentation/world_map/MapFrameControl.cs" id="4_frame"]
+[ext_resource type="Script" path="res://scripts/presentation/world_map/NavigationTargetArrow.cs" id="5_arrow"]
+[ext_resource type="Script" path="res://scripts/presentation/world_map/MinimapShipIndicator.cs" id="6_minimap_ship"]
+
+[sub_resource type="StyleBoxFlat" id="StyleButton"]
+bg_color = Color(0.026, 0.07, 0.09, 0.96)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.08, 0.38, 0.5, 0.8)
+corner_radius_top_left = 3
+corner_radius_top_right = 3
+corner_radius_bottom_right = 3
+corner_radius_bottom_left = 3
+content_margin_left = 15.0
+content_margin_top = 8.0
+content_margin_right = 15.0
+content_margin_bottom = 8.0
+
+[sub_resource type="StyleBoxFlat" id="StyleButtonHover"]
+bg_color = Color(0.045, 0.14, 0.18, 0.98)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.12, 0.72, 0.95, 0.95)
+corner_radius_top_left = 3
+corner_radius_top_right = 3
+corner_radius_bottom_right = 3
+corner_radius_bottom_left = 3
+content_margin_left = 15.0
+content_margin_top = 8.0
+content_margin_right = 15.0
+content_margin_bottom = 8.0
+
+[sub_resource type="StyleBoxFlat" id="StyleButtonPressed"]
+bg_color = Color(0.07, 0.24, 0.3, 1)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.24, 0.82, 1, 1)
+corner_radius_top_left = 3
+corner_radius_top_right = 3
+corner_radius_bottom_right = 3
+corner_radius_bottom_left = 3
+content_margin_left = 15.0
+content_margin_top = 8.0
+content_margin_right = 15.0
+content_margin_bottom = 8.0
+
+[sub_resource type="StyleBoxEmpty" id="StyleButtonDisabled"]
+
+[sub_resource type="StyleBoxFlat" id="StyleClose"]
+bg_color = Color(0.02, 0.055, 0.075, 0.9)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.1, 0.46, 0.6, 0.8)
+corner_radius_top_left = 3
+corner_radius_top_right = 3
+corner_radius_bottom_right = 3
+corner_radius_bottom_left = 3
 
 [node name="WorldMap" type="CanvasLayer"]
 layer = 20
@@ -14,23 +81,197 @@ anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
 mouse_filter = 2
-script = ExtResource("1")
+script = ExtResource("1_controller")
 
-[node name="Backdrop" type="ColorRect" parent="Controller"]
+[node name="Minimap" type="Control" parent="Controller"]
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 1.0
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = -272.0
+offset_top = -272.0
+offset_right = -24.0
+offset_bottom = -24.0
+grow_horizontal = 0
+grow_vertical = 0
+mouse_filter = 2
+script = ExtResource("2_minimap")
+
+[node name="ShipIndicator" type="Control" parent="Controller/Minimap"]
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
-color = Color(0.015, 0.025, 0.07, 0.96)
-show_behind_parent = true
+mouse_filter = 2
+script = ExtResource("6_minimap_ship")
 
-[node name="Title" type="Label" parent="Controller"]
+[node name="NavigationArrow" type="Control" parent="Controller"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+script = ExtResource("5_arrow")
+
+[node name="MapOverlay" type="Control" parent="Controller"]
+visible = false
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 0
+
+[node name="Dim" type="ColorRect" parent="Controller/MapOverlay"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+color = Color(0.002, 0.007, 0.012, 0.68)
+
+[node name="Frame" type="Control" parent="Controller/MapOverlay"]
+layout_mode = 1
+anchor_left = 0.045
+anchor_top = 0.05
+anchor_right = 0.955
+anchor_bottom = 0.95
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 0
+script = ExtResource("4_frame")
+
+[node name="Title" type="Label" parent="Controller/MapOverlay/Frame"]
 layout_mode = 0
 offset_left = 30.0
 offset_top = 24.0
-offset_right = 440.0
-offset_bottom = 65.0
-text = "Sternenkarte"
-theme_override_font_sizes/font_size = 24
+offset_right = 760.0
+offset_bottom = 58.0
+theme_override_colors/font_color = Color(0.84, 0.94, 0.98, 1)
+theme_override_colors/font_shadow_color = Color(0.04, 0.38, 0.52, 0.65)
+theme_override_constants/shadow_offset_x = 1
+theme_override_constants/shadow_offset_y = 2
+theme_override_font_sizes/font_size = 23
+text = "STERNENKARTE"
+
+[node name="CloseButton" type="Button" parent="Controller/MapOverlay/Frame"]
+layout_mode = 1
+anchors_preset = 1
+anchor_left = 1.0
+anchor_right = 1.0
+offset_left = -62.0
+offset_top = 20.0
+offset_right = -24.0
+offset_bottom = 58.0
+grow_horizontal = 0
+focus_mode = 0
+mouse_default_cursor_shape = 2
+theme_override_colors/font_color = Color(0.65, 0.86, 0.93, 1)
+theme_override_colors/font_hover_color = Color(0.9, 0.98, 1, 1)
+theme_override_styles/normal = SubResource("StyleClose")
+theme_override_styles/hover = SubResource("StyleButtonHover")
+theme_override_styles/pressed = SubResource("StyleButtonPressed")
+text = "×"
+
+[node name="MapArea" type="Control" parent="Controller/MapOverlay/Frame"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 26.0
+offset_top = 72.0
+offset_right = -26.0
+offset_bottom = -76.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 0
+script = ExtResource("3_canvas")
+
+[node name="Status" type="Label" parent="Controller/MapOverlay/Frame"]
+layout_mode = 1
+anchors_preset = 2
+anchor_top = 1.0
+anchor_bottom = 1.0
+offset_left = 28.0
+offset_top = -58.0
+offset_right = 480.0
+offset_bottom = -27.0
+grow_vertical = 0
+theme_override_colors/font_color = Color(0.35, 0.58, 0.67, 1)
+theme_override_font_sizes/font_size = 12
+text = "0 BEREICHE GESCANNT   ·   0 KOMETEN ENTDECKT"
+vertical_alignment = 1
+
+[node name="ButtonRow" type="HBoxContainer" parent="Controller/MapOverlay/Frame"]
+layout_mode = 1
+anchors_preset = 3
+anchor_left = 1.0
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = -745.0
+offset_top = -62.0
+offset_right = -28.0
+offset_bottom = -22.0
+grow_horizontal = 0
+grow_vertical = 0
+theme_override_constants/separation = 8
+alignment = 2
+
+[node name="FocusShip" type="Button" parent="Controller/MapOverlay/Frame/ButtonRow"]
+layout_mode = 2
+focus_mode = 0
+toggle_mode = true
+mouse_default_cursor_shape = 2
+theme_override_colors/font_color = Color(0.65, 0.82, 0.88, 1)
+theme_override_colors/font_hover_color = Color(0.9, 0.98, 1, 1)
+theme_override_styles/normal = SubResource("StyleButton")
+theme_override_styles/hover = SubResource("StyleButtonHover")
+theme_override_styles/pressed = SubResource("StyleButtonPressed")
+text = "ZUM RAUMSCHIFF"
+
+[node name="FocusLast" type="Button" parent="Controller/MapOverlay/Frame/ButtonRow"]
+layout_mode = 2
+focus_mode = 0
+mouse_default_cursor_shape = 2
+theme_override_colors/font_color = Color(0.65, 0.82, 0.88, 1)
+theme_override_colors/font_hover_color = Color(0.9, 0.98, 1, 1)
+theme_override_colors/font_disabled_color = Color(0.28, 0.37, 0.4, 1)
+theme_override_styles/normal = SubResource("StyleButton")
+theme_override_styles/hover = SubResource("StyleButtonHover")
+theme_override_styles/pressed = SubResource("StyleButtonPressed")
+theme_override_styles/disabled = SubResource("StyleButtonDisabled")
+text = "LETZTER KOMET"
+
+[node name="ClearTarget" type="Button" parent="Controller/MapOverlay/Frame/ButtonRow"]
+layout_mode = 2
+focus_mode = 0
+mouse_default_cursor_shape = 2
+theme_override_colors/font_color = Color(0.65, 0.82, 0.88, 1)
+theme_override_colors/font_hover_color = Color(0.9, 0.98, 1, 1)
+theme_override_colors/font_disabled_color = Color(0.28, 0.37, 0.4, 1)
+theme_override_styles/normal = SubResource("StyleButton")
+theme_override_styles/hover = SubResource("StyleButtonHover")
+theme_override_styles/pressed = SubResource("StyleButtonPressed")
+theme_override_styles/disabled = SubResource("StyleButtonDisabled")
+text = "ZIEL LÖSCHEN"
+
+[node name="LandableOnly" type="CheckButton" parent="Controller/MapOverlay/Frame/ButtonRow"]
+layout_mode = 2
+focus_mode = 0
+mouse_default_cursor_shape = 2
+theme_override_colors/font_color = Color(0.65, 0.82, 0.88, 1)
+theme_override_colors/font_hover_color = Color(0.9, 0.98, 1, 1)
+theme_override_styles/normal = SubResource("StyleButton")
+theme_override_styles/hover = SubResource("StyleButtonHover")
+theme_override_styles/pressed = SubResource("StyleButtonPressed")
+text = "NUR LANDBAR"

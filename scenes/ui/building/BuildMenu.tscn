@@ -1,0 +1,187 @@
+[gd_scene load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scripts/presentation/building/BuildMenuController.cs" id="1_controller"]
+[ext_resource type="Script" path="res://scripts/presentation/building/BuildMenuBackdrop.cs" id="2_backdrop"]
+
+[node name="BuildMenu" type="CanvasLayer"]
+layer = 24
+process_mode = 3
+script = ExtResource("1_controller")
+
+[node name="Overlay" type="Control" parent="."]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 0
+
+[node name="Backdrop" type="Control" parent="Overlay"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+script = ExtResource("2_backdrop")
+
+[node name="SafeArea" type="MarginContainer" parent="Overlay"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/margin_left = 32
+theme_override_constants/margin_top = 28
+theme_override_constants/margin_right = 32
+theme_override_constants/margin_bottom = 28
+
+[node name="Frame" type="PanelContainer" parent="Overlay/SafeArea"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+
+[node name="FrameMargin" type="MarginContainer" parent="Overlay/SafeArea/Frame"]
+layout_mode = 2
+theme_override_constants/margin_left = 22
+theme_override_constants/margin_top = 18
+theme_override_constants/margin_right = 22
+theme_override_constants/margin_bottom = 16
+
+[node name="Layout" type="VBoxContainer" parent="Overlay/SafeArea/Frame/FrameMargin"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="Header" type="HBoxContainer" parent="Overlay/SafeArea/Frame/FrameMargin/Layout"]
+layout_mode = 2
+theme_override_constants/separation = 14
+
+[node name="Identity" type="VBoxContainer" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Header"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 0
+
+[node name="Eyebrow" type="Label" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Header/Identity"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.08, 0.72, 0.94, 1)
+theme_override_font_sizes/font_size = 10
+text = "KONSTRUKTIONSSYSTEM  //  MASCHINENKATALOG"
+
+[node name="Title" type="Label" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Header/Identity"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.86, 0.95, 0.98, 1)
+theme_override_font_sizes/font_size = 25
+text = "BAUMENÜ"
+
+[node name="Info" type="Label" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Header"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_colors/font_color = Color(0.43, 0.62, 0.69, 1)
+theme_override_font_sizes/font_size = 11
+text = "BAUKOSTEN WERDEN AUS DEM ASTRONAUTEN-INVENTAR GEPRÜFT"
+horizontal_alignment = 2
+vertical_alignment = 1
+autowrap_mode = 2
+
+[node name="Close" type="Button" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Header"]
+custom_minimum_size = Vector2(42, 42)
+layout_mode = 2
+focus_mode = 0
+mouse_default_cursor_shape = 2
+theme_override_font_sizes/font_size = 20
+text = "×"
+
+[node name="Rule" type="HSeparator" parent="Overlay/SafeArea/Frame/FrameMargin/Layout"]
+layout_mode = 2
+
+[node name="Body" type="BoxContainer" parent="Overlay/SafeArea/Frame/FrameMargin/Layout"]
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_constants/separation = 18
+
+[node name="CategoryPanel" type="PanelContainer" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Body"]
+custom_minimum_size = Vector2(228, 0)
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="Margin" type="MarginContainer" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Body/CategoryPanel"]
+layout_mode = 2
+theme_override_constants/margin_left = 12
+theme_override_constants/margin_top = 13
+theme_override_constants/margin_right = 12
+theme_override_constants/margin_bottom = 13
+
+[node name="Layout" type="VBoxContainer" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Body/CategoryPanel/Margin"]
+layout_mode = 2
+theme_override_constants/separation = 9
+
+[node name="Title" type="Label" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Body/CategoryPanel/Margin/Layout"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.44, 0.66, 0.73, 1)
+theme_override_font_sizes/font_size = 10
+text = "KATEGORIEN"
+
+[node name="CategoryButtons" type="VBoxContainer" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Body/CategoryPanel/Margin/Layout"]
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_constants/separation = 7
+
+[node name="CatalogScroll" type="ScrollContainer" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Body"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+horizontal_scroll_mode = 0
+vertical_scroll_mode = 1
+
+[node name="Catalog" type="VBoxContainer" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Body/CatalogScroll"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 11
+
+[node name="Header" type="HBoxContainer" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Body/CatalogScroll/Catalog"]
+layout_mode = 2
+
+[node name="Title" type="Label" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Body/CatalogScroll/Catalog/Header"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_colors/font_color = Color(0.66, 0.88, 0.95, 1)
+theme_override_font_sizes/font_size = 15
+text = "VERARBEITUNG"
+
+[node name="Count" type="Label" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Body/CatalogScroll/Catalog/Header"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.4, 0.59, 0.66, 1)
+theme_override_font_sizes/font_size = 10
+text = "00 MASCHINEN"
+horizontal_alignment = 2
+
+[node name="Cards" type="GridContainer" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Body/CatalogScroll/Catalog"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/h_separation = 14
+theme_override_constants/v_separation = 14
+columns = 2
+
+[node name="Footer" type="HBoxContainer" parent="Overlay/SafeArea/Frame/FrameMargin/Layout"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="Status" type="Label" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Footer"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_colors/font_color = Color(0.35, 0.74, 0.86, 1)
+theme_override_font_sizes/font_size = 11
+text = "Wähle eine Maschine, um den Platzierungsmodus zu starten."
+clip_text = true
+text_overrun_behavior = 3
+
+[node name="Hint" type="Label" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Footer"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.43, 0.57, 0.62, 1)
+theme_override_font_sizes/font_size = 10
+text = "B / ESC  SCHLIESSEN"
+horizontal_alignment = 2
+

@@ -17,8 +17,9 @@ sequenceDiagram
     participant Generator
     Ship->>Root: betritt neue Sektorkoordinate
     Root->>Generator: Seed + Koordinate + Einstellungen
-    Generator-->>Root: GeneratedSector
-    Root->>Root: nahe 3x3 laden, entfernte entladen
+    Generator-->>Root: GeneratedSectorContent
+    Root->>Root: nahe 5x5 aktiv laden, entfernte entladen
+    Root->>Root: 14.000 Einheiten als leichte Kartendaten scannen
 ```
 
-Weltänderungen werden künftig als Deltas über der aus dem Seed rekonstruierten Grundwelt gespeichert. Schiffsteuerung und spätere On-Foot-Steuerung werden getrennte Zustände/Komponenten. Fabrikmodelle, Rezepte und Energie gehören in den Core; Godot-Nodes visualisieren sie lediglich.
+Weltänderungen werden als Deltas über der aus dem Seed rekonstruierten Grundwelt gespeichert. Schiff- und On-Foot-Steuerung bleiben getrennte Zustände. Fabrikmodelle, Rezepte, Inventartransaktionen, Energie, Forschung und Treibstoff liegen im Godot-unabhängigen Core. `FactoryRuntimeController` aktiviert davon nur die aktuell geladenen Kometennetze; `MachineView` und die Menüs visualisieren den Zustand. Der versionierte Infrastructure-Adapter speichert Maschinen-, Forschungs- und Tank-Snapshots unter `user://factory_state.json`.

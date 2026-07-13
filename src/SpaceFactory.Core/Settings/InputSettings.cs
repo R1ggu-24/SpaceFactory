@@ -78,6 +78,12 @@ public sealed record InputSettings
             normalized[GameAction.ShipInteraction] = legacyShipBinding;
         }
 
+        if (!_bindings.ContainsKey(GameAction.OpenBuildMenu) &&
+            _bindings.TryGetValue(GameAction.Build, out var legacyBuildBinding))
+        {
+            normalized[GameAction.OpenBuildMenu] = legacyBuildBinding;
+        }
+
         return new InputSettings(normalized);
     }
 

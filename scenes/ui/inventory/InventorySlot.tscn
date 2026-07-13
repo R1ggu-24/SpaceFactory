@@ -25,10 +25,10 @@ layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
-offset_left = 3.0
-offset_top = 3.0
-offset_right = -3.0
-offset_bottom = -3.0
+offset_left = 5.0
+offset_top = 5.0
+offset_right = -5.0
+offset_bottom = -5.0
 grow_horizontal = 2
 grow_vertical = 2
 mouse_filter = 2
@@ -45,40 +45,49 @@ mouse_filter = 2
 text = "·"
 horizontal_alignment = 1
 vertical_alignment = 1
-theme_override_colors/font_color = Color(0.17, 0.42, 0.5, 0.8)
-theme_override_font_sizes/font_size = 25
+theme_override_colors/font_color = Color(0.15, 0.35, 0.42, 0.72)
+theme_override_font_sizes/font_size = 22
 
-[node name="SlotNumber" type="Label" parent="Margin/SlotContent"]
+[node name="FullMarker" type="Label" parent="Margin/SlotContent"]
+visible = false
 layout_mode = 1
-anchors_preset = 0
-offset_left = 2.0
+anchors_preset = 1
+anchor_left = 1.0
+anchor_right = 1.0
+offset_left = -28.0
 offset_top = 1.0
-offset_right = 26.0
-offset_bottom = 18.0
+offset_right = -2.0
+offset_bottom = 15.0
+grow_horizontal = 0
 mouse_filter = 2
-text = "01"
-theme_override_colors/font_color = Color(0.35, 0.58, 0.66, 0.65)
-theme_override_font_sizes/font_size = 9
+text = "MAX"
+horizontal_alignment = 2
+theme_override_colors/font_color = Color(0.25, 0.82, 0.96, 0.86)
+theme_override_font_sizes/font_size = 8
 
-[node name="Amount" type="Label" parent="Margin/SlotContent"]
+[node name="AmountBadge" type="PanelContainer" parent="Margin/SlotContent"]
 layout_mode = 1
 anchors_preset = 8
 anchor_left = 1.0
 anchor_top = 1.0
 anchor_right = 1.0
 anchor_bottom = 1.0
-offset_left = -42.0
-offset_top = -23.0
+offset_left = -47.0
+offset_top = -24.0
 offset_right = -2.0
 offset_bottom = -2.0
 grow_horizontal = 0
 grow_vertical = 0
 mouse_filter = 2
+
+[node name="Amount" type="Label" parent="Margin/SlotContent/AmountBadge"]
+layout_mode = 2
+mouse_filter = 2
 text = "200"
 horizontal_alignment = 2
-vertical_alignment = 2
-theme_override_colors/font_color = Color(0.94, 0.99, 1, 1)
+vertical_alignment = 1
+theme_override_colors/font_color = Color(0.95, 0.99, 1, 1)
 theme_override_colors/font_shadow_color = Color(0, 0, 0, 1)
 theme_override_constants/shadow_offset_x = 1
 theme_override_constants/shadow_offset_y = 1
-theme_override_font_sizes/font_size = 14
+theme_override_font_sizes/font_size = 13
