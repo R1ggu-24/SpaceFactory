@@ -11,9 +11,9 @@ Das Einstellungsmenü wird über die Aktion `pause` geöffnet, standardmäßig m
 
 ## Tastatur und Maus
 
-Der Godot-unabhängige Katalog `InputActionCatalog` definiert alle 14 sichtbaren Aktionen, ihre InputMap-ID, Bezeichnung und Standardbelegung. Eine neue Belegung wird zunächst als Entwurf gehalten. Bei einer Doppelbelegung warnt das Menü und bietet einen konfliktfreien Tausch der beiden Belegungen an. Erst `Speichern` aktualisiert die Godot-`InputMap` und die dauerhafte Konfiguration. Bewegungsaktionen behalten Pfeiltasten als zusätzliche, feste Alternative.
+Der Godot-unabhängige Katalog `InputActionCatalog` definiert alle 15 sichtbaren Aktionen, ihre InputMap-ID, Bezeichnung und Standardbelegung. Dazu gehören auch das gemeinsame Ein-/Aussteigen, das Inventar, der standardmäßig auf `Shift` liegende Raumschiff-Boost, das standardmäßig auf `H` liegende Befestigen beziehungsweise Lösen des Raumschiffs am Kometen und das Baumenü auf `B`. Das Baumenü verwendet die InputMap-ID `build_menu`; die frühere Aktion `build_mode` wird beim Laden alter Einstellungen migrationssicher übernommen und ist nicht parallel aktiv. Eine neue Belegung wird zunächst als Entwurf gehalten. Bei einer Doppelbelegung warnt das Menü und bietet einen konfliktfreien Tausch der beiden Belegungen an. Erst `Speichern` aktualisiert die Godot-`InputMap` und die dauerhafte Konfiguration. Bewegungsaktionen behalten Pfeiltasten als zusätzliche, feste Alternative.
 
-Gameplay-Hinweise lesen ihre Tastenbezeichnungen direkt aus der aktuellen `InputMap`, sodass Einsteigen, Aussteigen, Karte und Abbau nach einer Änderung korrekt beschriftet bleiben.
+Gameplay-Hinweise lesen ihre Tastenbezeichnungen direkt aus der aktuellen `InputMap`, sodass Einsteigen, Aussteigen, Karte und Abbau nach einer Änderung korrekt beschriftet bleiben. Die frühere permanente Tastenübersicht im Spiel wurde entfernt; die vollständige Belegung ist dauerhaft unter `Einstellungen → Tastatureinstellungen` erreichbar, während im Spiel nur kontextabhängige Hinweise erscheinen.
 
 ## Audio
 

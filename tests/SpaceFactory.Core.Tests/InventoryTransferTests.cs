@@ -205,15 +205,184 @@ public sealed class InventoryTransferTests
         Assert.All(astronaut.Slots.Concat(ship.Slots), slot => Assert.InRange(slot.Amount, 0, 200));
     }
 
+    [Fact]
+    public void Preview_ToEmptySlot_ReportsWholeMoveWithoutMutation()
+    {
+        var astronaut = CreateInventoryWith(IronOre, 137);
+        var ship = new SlotInventory(InventoryConfiguration.ShipSlotCount);
+        var astronautBefore = Snapshot(astronaut);
+        var shipBefore = Snapshot(ship);
+
+        var preview = InventoryTransfer.Preview(astronaut, 0, ship, 12);
+
+        Assert.Equal(InventoryTransferResult.Success(137, 137), preview);
+        Assert.Equal(astronautBefore, Snapshot(astronaut));
+        Assert.Equal(shipBefore, Snapshot(ship));
+        Assert.Equal(preview, InventoryTransfer.Transfer(astronaut, 0, ship, 12));
+    }
+
+    [Fact]
+    public void Preview_Merge_ReportsOnlyAvailableSpaceWithoutMutation()
+    {
+        var astronaut = CreateInventoryWith(IronOre, 50);
+        var ship = CreateInventoryWith(IronOre, 199, InventoryConfiguration.ShipSlotCount);
+        var astronautBefore = Snapshot(astronaut);
+        var shipBefore = Snapshot(ship);
+
+        var preview = InventoryTransfer.Preview(astronaut, 0, ship, 0);
+
+        Assert.Equal(InventoryTransferResult.Success(50, 1), preview);
+        Assert.Equal(49, preview.RemainingAmount);
+        Assert.Equal(astronautBefore, Snapshot(astronaut));
+        Assert.Equal(shipBefore, Snapshot(ship));
+        Assert.Equal(preview, InventoryTransfer.Transfer(astronaut, 0, ship, 0));
+    }
+
+    [Fact]
+    public void Preview_FullMatchingTarget_ReportsFailureWithoutMutation()
+    {
+        var astronaut = CreateInventoryWith(IronOre, 25);
+        var ship = CreateInventoryWith(IronOre, 200, InventoryConfiguration.ShipSlotCount);
+        var astronautBefore = Snapshot(astronaut);
+        var shipBefore = Snapshot(ship);
+
+        var preview = InventoryTransfer.Preview(astronaut, 0, ship, 0);
+
+        Assert.Equal(
+            InventoryTransferResult.Failed(InventoryTransferFailure.TargetStackFull, 25),
+            preview);
+        Assert.Equal(astronautBefore, Snapshot(astronaut));
+        Assert.Equal(shipBefore, Snapshot(ship));
+        Assert.Equal(preview, InventoryTransfer.Transfer(astronaut, 0, ship, 0));
+    }
+
+    [Fact]
+    public void Preview_DifferentWholeStacks_ReportsSwapWithoutMutation()
+    {
+        var astronaut = CreateInventoryWith(IronOre, 80);
+        var ship = CreateInventoryWith(WaterIce, 120, InventoryConfiguration.ShipSlotCount);
+        var astronautBefore = Snapshot(astronaut);
+        var shipBefore = Snapshot(ship);
+
+        var preview = InventoryTransfer.Preview(astronaut, 0, ship, 0);
+
+        Assert.Equal(InventoryTransferResult.Success(80, 80, swapped: true), preview);
+        Assert.Equal(astronautBefore, Snapshot(astronaut));
+        Assert.Equal(shipBefore, Snapshot(ship));
+        Assert.Equal(preview, InventoryTransfer.Transfer(astronaut, 0, ship, 0));
+    }
+
+    [Fact]
+    public void Preview_PartialAmountOntoDifferentResource_ReportsFailureWithoutMutation()
+    {
+        var astronaut = CreateInventoryWith(IronOre, 80);
+        var ship = CreateInventoryWith(WaterIce, 120, InventoryConfiguration.ShipSlotCount);
+        var astronautBefore = Snapshot(astronaut);
+        var shipBefore = Snapshot(ship);
+
+        var preview = InventoryTransfer.Preview(astronaut, 0, ship, 0, amount: 40);
+
+        Assert.Equal(
+            InventoryTransferResult.Failed(InventoryTransferFailure.IncompatibleStacks, 40),
+            preview);
+        Assert.Equal(astronautBefore, Snapshot(astronaut));
+        Assert.Equal(shipBefore, Snapshot(ship));
+        Assert.Equal(preview, InventoryTransfer.Transfer(astronaut, 0, ship, 0, amount: 40));
+    }
+
+    [Fact]
+    public void Preview_MoveBeyondTargetStackLimit_ReportsFailureWithoutMutation()
+    {
+        var source = CreateInventoryWith(IronOre, 250, slotCount: 1, maximumStackSize: 300);
+        var target = new SlotInventory(slotCount: 1, maximumStackSize: 200);
+        var sourceBefore = Snapshot(source);
+        var targetBefore = Snapshot(target);
+
+        var preview = InventoryTransfer.Preview(source, 0, target, 0);
+
+        Assert.Equal(
+            InventoryTransferResult.Failed(InventoryTransferFailure.StackLimitExceeded, 250),
+            preview);
+        Assert.Equal(sourceBefore, Snapshot(source));
+        Assert.Equal(targetBefore, Snapshot(target));
+        Assert.Equal(preview, InventoryTransfer.Transfer(source, 0, target, 0));
+    }
+
+    [Fact]
+    public void Preview_SwapBeyondSourceStackLimit_ReportsFailureWithoutMutation()
+    {
+        var source = CreateInventoryWith(IronOre, 50, slotCount: 1, maximumStackSize: 100);
+        var target = CreateInventoryWith(WaterIce, 150, slotCount: 1, maximumStackSize: 200);
+        var sourceBefore = Snapshot(source);
+        var targetBefore = Snapshot(target);
+
+        var preview = InventoryTransfer.Preview(source, 0, target, 0);
+
+        Assert.Equal(
+            InventoryTransferResult.Failed(InventoryTransferFailure.StackLimitExceeded, 50),
+            preview);
+        Assert.Equal(sourceBefore, Snapshot(source));
+        Assert.Equal(targetBefore, Snapshot(target));
+        Assert.Equal(preview, InventoryTransfer.Transfer(source, 0, target, 0));
+    }
+
+    [Fact]
+    public void Preview_SameAddress_ReportsNoOpWithoutMutation()
+    {
+        var inventory = CreateInventoryWith(IronOre, 75);
+        var before = Snapshot(inventory);
+
+        var preview = InventoryTransfer.Preview(inventory, 0, inventory, 0);
+
+        Assert.Equal(InventoryTransferResult.Success(75, 0), preview);
+        Assert.Equal(before, Snapshot(inventory));
+        Assert.Equal(preview, InventoryTransfer.Transfer(inventory, 0, inventory, 0));
+        Assert.Equal(before, Snapshot(inventory));
+    }
+
+    [Fact]
+    public void Preview_InvalidSources_ReportFailuresWithoutMutation()
+    {
+        var emptySource = new SlotInventory(1);
+        var occupiedSource = CreateInventoryWith(IronOre, 12, slotCount: 1);
+        var target = new SlotInventory(1);
+        var emptyBefore = Snapshot(emptySource);
+        var occupiedBefore = Snapshot(occupiedSource);
+        var targetBefore = Snapshot(target);
+
+        var empty = InventoryTransfer.Preview(emptySource, 0, target, 0);
+        var invalidAmount = InventoryTransfer.Preview(occupiedSource, 0, target, 0, amount: 0);
+        var insufficient = InventoryTransfer.Preview(occupiedSource, 0, target, 0, amount: 13);
+
+        Assert.Equal(
+            InventoryTransferResult.Failed(InventoryTransferFailure.SourceEmpty),
+            empty);
+        Assert.Equal(
+            InventoryTransferResult.Failed(InventoryTransferFailure.InvalidAmount),
+            invalidAmount);
+        Assert.Equal(
+            InventoryTransferResult.Failed(InventoryTransferFailure.InsufficientItems, 13),
+            insufficient);
+        Assert.Equal(emptyBefore, Snapshot(emptySource));
+        Assert.Equal(occupiedBefore, Snapshot(occupiedSource));
+        Assert.Equal(targetBefore, Snapshot(target));
+    }
+
     private static SlotInventory CreateInventoryWith(
         ItemId itemId,
         int amount,
-        int slotCount = InventoryConfiguration.AstronautSlotCount)
+        int slotCount = InventoryConfiguration.AstronautSlotCount,
+        int maximumStackSize = InventoryConfiguration.MaximumStackSize)
     {
-        var inventory = new SlotInventory(slotCount);
+        var inventory = new SlotInventory(slotCount, maximumStackSize);
         Assert.True(inventory.Add(itemId, amount).Succeeded);
         return inventory;
     }
+
+    private static (ItemId? ItemId, int Amount)[] Snapshot(SlotInventory inventory) =>
+        inventory.Slots
+            .Select(slot => (slot.ItemId, slot.Amount))
+            .ToArray();
 
     private static int Total(params SlotInventory[] inventories) =>
         inventories.Sum(inventory => inventory.TotalItemCount);

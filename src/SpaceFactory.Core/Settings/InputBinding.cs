@@ -42,6 +42,7 @@ public static class InputBindingCodes
     public const long D = 68;
     public const long E = 69;
     public const long F = 70;
+    public const long H = 72;
     public const long I = 73;
     public const long M = 77;
     public const long Q = 81;
@@ -50,6 +51,7 @@ public static class InputBindingCodes
     public const long W = 87;
     public const long X = 88;
     public const long Escape = 4_194_305;
+    public const long Shift = 4_194_325;
     public const long Up = 4_194_320;
     public const long Down = 4_194_322;
     public const long Left = 4_194_319;

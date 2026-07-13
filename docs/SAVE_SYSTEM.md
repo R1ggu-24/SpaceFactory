@@ -6,4 +6,12 @@ Sektordeltas beschreiben gebaute oder zerstörte Maschinen, Lagerinhalte und abg
 
 Für Ressourcenvorkommen ist dieses Delta-Prinzip bereits umgesetzt. Jedes Vorkommen erhält aus Welt-, Kometen- und Vorkommens-Seed eine stabile ID. Nur veränderte Restmengen werden in `user://resource_deposits.json` gespeichert; unveränderte Vorkommen werden beim erneuten Laden kostenlos aus dem Seed rekonstruiert. Beim Laden eines Sektors wird der gespeicherte Restwert auf die generierte Grundwelt angewendet, sodass vollständig abgebaute Vorkommen nicht wieder erscheinen.
 
-Das Dateiformat erhält eine eigene `saveVersion`; Migrationen wandeln ältere Versionen schrittweise um. Atomisches Schreiben, Backups und vollständige Implementierung folgen in einer späteren Phase.
+Der Fabrikzustand besitzt bereits ein eigenes versioniertes Format in `user://factory_state.json`.
+Maschinen, Forschung, die aktive Forschungsstation, beide Spielerinventare, der erste kostenlose
+Basisgenerator, Raumschifftreibstoff und die letzten UTC-Simulationszeitpunkte pro Komet werden
+über `IFactoryStateStore` gespeichert. Schema v2 liest weiterhin v1-Dateien und migriert deren
+nicht vorhandene Inventare sicher als leer. Der
+`JsonFactoryStateStore` schreibt zunächst eine validierte Tempdatei und ersetzt die Zieldatei erst
+danach per Godot-Umbenennung. Details und Validierungsregeln stehen in
+[`FACTORY_PERSISTENCE.md`](FACTORY_PERSISTENCE.md). Künftige Versionsmigrationen können vor der
+expliziten DTO-zu-Core-Konvertierung ergänzt werden.

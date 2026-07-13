@@ -7,6 +7,9 @@ namespace SpaceFactory.Presentation.World;
 public partial class ResourceDepositView : Area2D
 {
     public const uint ResourceCollisionLayer = 1u << 2;
+#if DEBUG
+    private static bool _headlessCollisionSmokeCompleted;
+#endif
     private ResourceDepositDefinition _deposit = null!;
     private ResourceDefinition _resource = null!;
     private IResourceStateStore _stateStore = null!;
@@ -17,6 +20,9 @@ public partial class ResourceDepositView : Area2D
     private int _sectorY;
     private int _visibleDamageCrackCount;
     private bool _interactionActive = true;
+    private CollisionShape2D? _interactionCollision;
+    private StaticBody2D? _physicalBody;
+    private CollisionShape2D? _physicalCollision;
 
     public string DepositId => _deposit.Id;
     public string DisplayName => _resource.DisplayName;
@@ -30,6 +36,8 @@ public partial class ResourceDepositView : Area2D
     /// concrete sound implementation or final audio assets.
     /// </summary>
     public event Action<string>? AudioCueRequested;
+
+    public event Action<string>? Exhausted;
 
     public void Configure(
         ResourceDepositDefinition deposit,
@@ -65,11 +73,37 @@ public partial class ResourceDepositView : Area2D
             return;
         }
 
-        var collision = new CollisionShape2D
+        var collisionShape = new CircleShape2D { Radius = _radius };
+        _interactionCollision = new CollisionShape2D
         {
-            Shape = new CircleShape2D { Radius = _radius },
+            Name = "InteractionCollision",
+            Shape = collisionShape,
+            Disabled = !_interactionActive,
         };
-        AddChild(collision);
+        AddChild(_interactionCollision);
+
+        _physicalBody = new StaticBody2D
+        {
+            Name = "PhysicalBody",
+            CollisionLayer = _interactionActive ? ResourceCollisionLayer : 0,
+            CollisionMask = 0,
+        };
+        _physicalCollision = new CollisionShape2D
+        {
+            Name = "PhysicalCollision",
+            Shape = collisionShape,
+            Disabled = !_interactionActive,
+        };
+        _physicalBody.AddChild(_physicalCollision);
+        AddChild(_physicalBody);
+#if DEBUG
+        if (!_headlessCollisionSmokeCompleted &&
+            (OS.HasFeature("headless") ||
+             DisplayServer.GetName().Contains("headless", StringComparison.OrdinalIgnoreCase)))
+        {
+            RunHeadlessCollisionSmokeTest();
+        }
+#endif
         QueueRedraw();
     }
 
@@ -94,10 +128,67 @@ public partial class ResourceDepositView : Area2D
         }
 
         _interactionActive = active;
-        CollisionLayer = active ? ResourceCollisionLayer : 0;
-        Monitorable = active;
-        InputPickable = active;
+        ApplyInteractionState();
     }
+
+    private void ApplyInteractionState()
+    {
+        CollisionLayer = _interactionActive ? ResourceCollisionLayer : 0;
+        Monitorable = _interactionActive;
+        InputPickable = _interactionActive;
+        if (_interactionCollision is not null)
+        {
+            _interactionCollision.SetDeferred(CollisionShape2D.PropertyName.Disabled, !_interactionActive);
+        }
+
+        if (_physicalBody is not null)
+        {
+            _physicalBody.CollisionLayer = _interactionActive ? ResourceCollisionLayer : 0;
+        }
+
+        if (_physicalCollision is not null)
+        {
+            _physicalCollision.SetDeferred(CollisionShape2D.PropertyName.Disabled, !_interactionActive);
+        }
+    }
+
+#if DEBUG
+    private void RunHeadlessCollisionSmokeTest()
+    {
+        SetInteractionActive(true);
+        RequireCollisionSmokeCondition(
+            CollisionLayer == ResourceCollisionLayer &&
+            _physicalBody?.CollisionLayer == ResourceCollisionLayer,
+            "active deposits must expose matching interaction and physical collision layers");
+
+        SetInteractionActive(false);
+        RequireCollisionSmokeCondition(
+            CollisionLayer == 0 &&
+            _physicalBody?.CollisionLayer == 0 &&
+            !Monitorable &&
+            !InputPickable,
+            "inactive deposits must disable interaction and physical collision together");
+
+        SetInteractionActive(true);
+        RequireCollisionSmokeCondition(
+            CollisionLayer == ResourceCollisionLayer &&
+            _physicalBody?.CollisionLayer == ResourceCollisionLayer &&
+            Monitorable &&
+            InputPickable,
+            "reactivated deposits must restore both collision roles");
+
+        _headlessCollisionSmokeCompleted = true;
+        GD.Print("RESOURCE_PHYSICAL_COLLISION_SMOKE_OK: shared layer, active toggle, ship-blocking body");
+    }
+
+    private static void RequireCollisionSmokeCondition(bool condition, string message)
+    {
+        if (!condition)
+        {
+            throw new InvalidOperationException($"Resource collision smoke test failed: {message}.");
+        }
+    }
+#endif
 
     public void RequestMiningAudioCue()
     {
@@ -112,7 +203,10 @@ public partial class ResourceDepositView : Area2D
         }
 
         _remainingAmount = 0;
+        _interactionActive = false;
+        ApplyInteractionState();
         _stateStore.SetRemainingAmount(_deposit, 0, _sectorX, _sectorY);
+        Exhausted?.Invoke(_deposit.Id);
         AudioCueRequested?.Invoke($"mining_complete:{_resource.Id.Value}");
         var burst = new MiningParticleBurst(_color, _deposit.VisualSeed ^ 0x5041525449434C45UL)
         {

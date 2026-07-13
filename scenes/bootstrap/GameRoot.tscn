@@ -1,14 +1,16 @@
-[gd_scene load_steps=10 format=3 uid="uid://ce7e2uc0ouo14"]
+[gd_scene load_steps=12 format=3 uid="uid://ce7e2uc0ouo14"]
 
 [ext_resource type="Script" uid="uid://cubytla80sc0t" path="res://scripts/presentation/bootstrap/GameRoot.cs" id="1"]
 [ext_resource type="PackedScene" path="res://scenes/ship/PlayerShip.tscn" id="2"]
-[ext_resource type="PackedScene" path="res://scenes/ui/DebugOverlay.tscn" id="3"]
 [ext_resource type="PackedScene" path="res://scenes/world_map/WorldMap.tscn" id="4"]
 [ext_resource type="PackedScene" path="res://scenes/world/StarfieldBackground.tscn" id="5"]
 [ext_resource type="PackedScene" path="res://scenes/player/OnFootPlayer.tscn" id="6"]
 [ext_resource type="PackedScene" path="res://scenes/ui/ResourceHud.tscn" id="7"]
 [ext_resource type="PackedScene" path="res://scenes/ui/settings/SettingsMenu.tscn" id="8"]
 [ext_resource type="PackedScene" path="res://scenes/ui/inventory/InventoryMenu.tscn" id="9"]
+[ext_resource type="Script" path="res://scripts/presentation/building/FactoryRuntimeController.cs" id="10"]
+[ext_resource type="PackedScene" path="res://scenes/ui/building/BuildMenu.tscn" id="11"]
+[ext_resource type="PackedScene" path="res://scenes/ui/building/MachinePanel.tscn" id="12"]
 
 [node name="GameRoot" type="Node" unique_id=379585936]
 process_mode = 3
@@ -23,17 +25,22 @@ process_mode = 1
 
 [node name="Sectors" type="Node2D" parent="World" unique_id=1413696490]
 
+[node name="FactoryRuntime" type="Node2D" parent="World"]
+script = ExtResource("10")
+
 [node name="PlayerShip" parent="World" unique_id=1244740194 instance=ExtResource("2")]
 position = Vector2(2500, 2500)
 
 [node name="OnFootPlayer" parent="World" unique_id=974839586 instance=ExtResource("6")]
 position = Vector2(2680, 2500)
 
-[node name="DebugOverlay" parent="." unique_id=372114387 instance=ExtResource("3")]
-
 [node name="ResourceHud" parent="." instance=ExtResource("7")]
 
 [node name="InventoryMenu" parent="." instance=ExtResource("9")]
+
+[node name="BuildMenu" parent="." instance=ExtResource("11")]
+
+[node name="MachinePanel" parent="." instance=ExtResource("12")]
 
 [node name="WorldMap" parent="." unique_id=804471116 instance=ExtResource("4")]
 

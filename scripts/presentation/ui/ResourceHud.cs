@@ -1,5 +1,6 @@
 using Godot;
 using SpaceFactory.Core.Inventory;
+using SpaceFactory.Core.Ships.Fuel;
 using SpaceFactory.Core.World.Resources;
 
 namespace SpaceFactory.Presentation.UI;
@@ -12,6 +13,10 @@ public partial class ResourceHud : CanvasLayer
     private ProgressBar _progress = null!;
     private Label _inventory = null!;
     private Label _message = null!;
+    private PanelContainer _fuelPanel = null!;
+    private ProgressBar _fuelProgress = null!;
+    private Label _fuelAmount = null!;
+    private Label _fuelTime = null!;
     private double _messageRemaining;
     private string? _shipPrompt;
     private string? _resourcePrompt;
@@ -24,9 +29,14 @@ public partial class ResourceHud : CanvasLayer
         _progress = GetNode<ProgressBar>("MiningPanel/Content/Progress");
         _inventory = GetNode<Label>("InventoryPanel/Content/Items");
         _message = GetNode<Label>("Message");
+        _fuelPanel = GetNode<PanelContainer>("FuelPanel");
+        _fuelProgress = GetNode<ProgressBar>("FuelPanel/Content/FuelProgress");
+        _fuelAmount = GetNode<Label>("FuelPanel/Content/FuelAmount");
+        _fuelTime = GetNode<Label>("FuelPanel/Content/FuelTime");
         _interaction.Visible = false;
         _miningPanel.Visible = false;
         _message.Visible = false;
+        _fuelPanel.Visible = false;
     }
 
     public override void _Process(double delta)
@@ -84,16 +94,34 @@ public partial class ResourceHud : CanvasLayer
         _messageRemaining = seconds;
     }
 
+    public void SetShipFuel(double currentFuel, bool visible)
+    {
+        _fuelPanel.Visible = visible;
+        if (!visible)
+        {
+            return;
+        }
+
+        var clampedFuel = Math.Clamp(currentFuel, 0, ShipFuelConfiguration.TankCapacity);
+        _fuelProgress.MaxValue = ShipFuelConfiguration.TankCapacity;
+        _fuelProgress.Value = clampedFuel;
+        _fuelAmount.Text = $"{clampedFuel:0} / {ShipFuelConfiguration.TankCapacity:0}";
+        var remainingSeconds = clampedFuel / ShipFuelConfiguration.ConsumptionPerBoostSecond;
+        var minutes = (int)(remainingSeconds / 60);
+        var seconds = (int)remainingSeconds % 60;
+        _fuelTime.Text = $"Boostzeit {minutes:00}:{seconds:00}";
+    }
+
     public void UpdateInventory(SlotInventory inventory, IReadOnlyList<ResourceDefinition> resources)
     {
         var lines = resources
             .Select(resource => (Resource: resource, Amount: inventory.GetAmount(resource.Id)))
             .Where(entry => entry.Amount > 0)
             .OrderBy(entry => entry.Resource.DisplayName)
-            .Select(entry => $"{entry.Resource.DisplayName}: {entry.Amount}/{inventory.MaximumStackSize}")
+            .Select(entry => $"{entry.Resource.DisplayName}: {entry.Amount}")
             .ToArray();
         _inventory.Text = lines.Length == 0
-            ? $"Leer\nKapazität: {inventory.UsedCapacity}/{inventory.Capacity}"
-            : $"{string.Join("\n", lines)}\n\nKapazität: {inventory.UsedCapacity}/{inventory.Capacity}";
+            ? $"Leer\nSlots: 0/{inventory.SlotCount}"
+            : $"{string.Join("\n", lines)}\n\nSlots: {inventory.UsedSlotCount}/{inventory.SlotCount}";
     }
 }
