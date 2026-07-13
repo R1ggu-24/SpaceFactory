@@ -123,8 +123,11 @@ public partial class SettingsMenuController : CanvasLayer
             return;
         }
 
-        if (@event is InputEventKey { Pressed: true, Echo: false } keyEvent &&
-            (keyEvent.Keycode == Key.Escape || keyEvent.PhysicalKeycode == Key.Escape))
+        var isPhysicalEscape = @event is InputEventKey { Pressed: true, Echo: false } keyEvent &&
+            (keyEvent.Keycode == Key.Escape || keyEvent.PhysicalKeycode == Key.Escape);
+        var isConfiguredPause = @event.IsActionPressed("pause") &&
+            (@event is not InputEventKey pauseKey || !pauseKey.Echo);
+        if (isPhysicalEscape || isConfiguredPause)
         {
             NavigateBackOrClose();
             GetViewport().SetInputAsHandled();

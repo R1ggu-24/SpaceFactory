@@ -9,15 +9,19 @@ public partial class SectorView : Node2D
 {
     private readonly List<AsteroidView> _cometViews = [];
     private readonly List<ResourceDepositView> _resourceViews = [];
-    private readonly ResourceDepositGenerator _resourceGenerator = new();
     private bool? _detailedCollisions;
 
+    public IReadOnlyList<AsteroidView> Comets => _cometViews;
+
+    public event Action<string>? ResourceExhausted;
+
     public void Display(
-        GeneratedSector sector,
+        GeneratedSectorContent content,
         int sectorSize,
         IReadOnlyList<ResourceDefinition> resourceCatalog,
         IResourceStateStore resourceStateStore)
     {
+        var sector = content.Sector;
         var resourcesById = resourceCatalog.ToDictionary(resource => resource.Id);
         foreach (var asteroid in sector.Asteroids)
         {
@@ -30,7 +34,7 @@ public partial class SectorView : Node2D
             _cometViews.Add(view);
             AddChild(view);
 
-            foreach (var deposit in _resourceGenerator.Generate(asteroid, resourceCatalog))
+            foreach (var deposit in content.GetResourceDeposits(asteroid.Id))
             {
                 if (!resourcesById.TryGetValue(deposit.ResourceId, out var resource))
                 {
@@ -48,6 +52,13 @@ public partial class SectorView : Node2D
                     sector.Coordinate.X,
                     sector.Coordinate.Y,
                     resourceStateStore);
+                if (depositView.IsExhausted)
+                {
+                    ResourceExhausted?.Invoke(deposit.Id);
+                    continue;
+                }
+
+                depositView.Exhausted += resourceId => ResourceExhausted?.Invoke(resourceId);
                 _resourceViews.Add(depositView);
                 view.AddChild(depositView);
             }

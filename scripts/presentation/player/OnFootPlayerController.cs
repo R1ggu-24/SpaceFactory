@@ -11,6 +11,8 @@ namespace SpaceFactory.Presentation.Player;
 
 public partial class OnFootPlayerController : CharacterBody2D
 {
+    public const float CameraZoom = 0.36f;
+
     [Export]
     public float MovementSpeed { get; set; } = 175.0f;
 
@@ -41,6 +43,7 @@ public partial class OnFootPlayerController : CharacterBody2D
     private float _walkPhase;
     private Vector2 _spriteRestPosition;
     private Vector2 _spriteRestScale;
+    private Vector2 _inheritedDriftVelocity;
     private Tween? _visibilityTween;
 
     public bool IsControlActive { get; private set; }
@@ -67,6 +70,7 @@ public partial class OnFootPlayerController : CharacterBody2D
             Shape = new CircleShape2D { Radius = 4 },
         });
         AddChild(_cursorProbe);
+        GetNode<Camera2D>("Camera2D").Zoom = Vector2.One * CameraZoom;
         SetCollisionActive(IsControlActive);
     }
 
@@ -163,11 +167,25 @@ public partial class OnFootPlayerController : CharacterBody2D
         if (!active)
         {
             Velocity = Vector2.Zero;
+            _inheritedDriftVelocity = Vector2.Zero;
             UpdateMovementAnimation(0, false);
         }
     }
 
     public void InterruptCurrentAction() => CancelMining();
+
+    public void StopMovementImmediately()
+    {
+        Velocity = Vector2.Zero;
+        _inheritedDriftVelocity = Vector2.Zero;
+        UpdateMovementAnimation(0, false);
+    }
+
+    public void ApplyInheritedVelocity(Vector2 velocity)
+    {
+        _inheritedDriftVelocity = velocity;
+        Velocity = velocity;
+    }
 
     private void SetCollisionActive(bool active)
     {
@@ -203,6 +221,7 @@ public partial class OnFootPlayerController : CharacterBody2D
 
     private void ContinueMining(ResourceDepositView target, float delta)
     {
+        _inheritedDriftVelocity = Vector2.Zero;
         if (_miningTarget != target)
         {
             CancelMining();
@@ -266,7 +285,7 @@ public partial class OnFootPlayerController : CharacterBody2D
     private void MoveNormally(float delta)
     {
         var direction = Input.GetVector("move_left", "move_right", "move_up", "move_down");
-        var targetVelocity = direction * MovementSpeed;
+        var targetVelocity = (direction * MovementSpeed) + _inheritedDriftVelocity;
         var velocityChange = direction.LengthSquared() > 0.01f ? Acceleration : Deceleration;
         Velocity = Velocity.MoveToward(targetVelocity, velocityChange * delta);
         MoveAndSlide();

@@ -4,7 +4,7 @@ SpaceFactory ist ein entstehendes 2D-Top-down-Fabrik- und Erkundungsspiel im Wel
 
 ## Aktueller Stand
 
-Die Demo zeigt ein per WASD steuerbares Raumschiff, einen langsameren Astronauten mit träger Beschleunigung, eine folgende Kamera, deterministisch erzeugte und kollidierbare Kometen, gerichtetes 5×5-Sektorstreaming, Debuganzeige, Sternenkarte (`M`) und ein vollständiges Einstellungsmenü (`Escape`). Kometen variieren in Form, Größe, Rotation, Gesteinsschichten, Rissen, Erhöhungen und Kratern. Auf ihren Oberflächen liegen 25 deterministisch verteilte Ressourcentypen, die der Astronaut abbauen und in einem begrenzten Inventar sammeln kann. Abgebaute Vorkommen bleiben auch nach dem Entladen ihres Sektors erschöpft. Fabrikbau und echtes Landen sind noch nicht implementiert.
+Die Demo zeigt ein per WASD steuerbares Raumschiff mit treibstoffabhängigem Shift-Boost, sichere Drift nach dem Aussteigen und eine Befestigung an grossen Kometen, einen langsameren Astronauten mit träger Beschleunigung, eine folgende Kamera sowie gerichtetes 5×5-Sektorstreaming. Eine nordfeste, anklickbare Minimap und die interaktive Sternenkarte (`M`) teilen sich erkundete Fog-of-War-Daten, Kometenziele und einen Navigationspfeil. Kometen variieren in Form, Größe, Rotation, Gesteinsschichten, Rissen, Erhöhungen und Kratern. Auf ihren Oberflächen liegen 25 deterministisch verteilte Ressourcentypen. Der Astronaut kann sie abbauen und auf grossen beziehungsweise sehr grossen Kometen zwölf Maschinentypen errichten. Ein lokales Stromnetz, 49 Rezepte, Behälterketten, Forschung, Lagerung und persistente Maschinenzustände bilden den ersten vollständigen Fabrikablauf.
 
 ## Voraussetzungen und Start
 
@@ -31,10 +31,13 @@ Im Editor anschließend `F6` oder `F5` drücken. Details und manuelle Befehle st
 ### Steuerung
 
 - `WASD` oder Pfeiltasten: Raumschiff beziehungsweise Astronaut bewegen
-- `F`: das Raumschiff verlassen
-- `E`: in der Nähe wieder in das Raumschiff einsteigen
+- `E`: das Raumschiff verlassen beziehungsweise nahe der Cockpitkante wieder einsteigen
+- `Shift` halten: Raumschiff-Boost mit doppeltem Zieltempo
+- `H`: ein langsames, oberflächennahes Raumschiff befestigen oder wieder lösen
+- `B`: als Astronaut Baumenü öffnen; beim Platzieren drehen Mausrad, Links- und Rechtsklick die Vorschau beziehungsweise bestätigen oder brechen ab
+- `I`: Inventar öffnen oder schließen; im Schiff zusätzlich das Raumschifflager anzeigen
 - Linke Maustaste halten: anvisiertes Ressourcenvorkommen in Reichweite abbauen
-- `M`: Sternenkarte öffnen oder schließen
+- `M` oder Linksklick auf die Minimap: interaktive Sternenkarte im Raumschiff öffnen
 - `Escape`: Einstellungsmenü öffnen, zurückgehen oder schließen
 
 Tasten können im Einstellungsmenü neu belegt werden. Audio- und Videooptionen werden ebenfalls dauerhaft gespeichert.
@@ -56,4 +59,4 @@ Tasten können im Einstellungsmenü neu belegt werden. Audio- und Videooptionen 
 - `tests`: Core-Tests
 - `docs`: Architektur, Design, Setup und Roadmap
 
-Weitere Details: [Architektur](docs/ARCHITECTURE.md), [Generierung](docs/PROCEDURAL_GENERATION.md), [Ressourcen und Abbau](docs/RESOURCE_SYSTEM.md), [Einstellungen](docs/SETTINGS.md), [Spielkonzept](docs/GAME_DESIGN.md).
+Weitere Details: [Architektur](docs/ARCHITECTURE.md), [Bau und Produktion](docs/FACTORY_SYSTEM.md), [Generierung](docs/PROCEDURAL_GENERATION.md), [Minimap und Sternenkarte](docs/EXPLORATION_MAP.md), [Ressourcen und Abbau](docs/RESOURCE_SYSTEM.md), [Inventar und Lager](docs/INVENTORY.md), [Spieler, Kamera und Raumschiff](docs/PLAYER_AND_SHIP.md), [Einstellungen](docs/SETTINGS.md), [Spielkonzept](docs/GAME_DESIGN.md).

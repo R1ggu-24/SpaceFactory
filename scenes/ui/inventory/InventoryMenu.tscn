@@ -10,8 +10,17 @@ process_mode = 3
 visible = false
 script = ExtResource("1_controller")
 
-[node name="Backdrop" type="Control" parent="."]
+[node name="Overlay" type="Control" parent="."]
 layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 0
+
+[node name="Backdrop" type="Control" parent="Overlay"]
+layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
@@ -20,8 +29,8 @@ grow_vertical = 2
 mouse_filter = 2
 script = ExtResource("2_backdrop")
 
-[node name="InputShield" type="ColorRect" parent="."]
-layout_mode = 3
+[node name="InputShield" type="ColorRect" parent="Overlay"]
+layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
@@ -30,96 +39,121 @@ grow_vertical = 2
 mouse_filter = 0
 color = Color(0, 0, 0, 0.01)
 
-[node name="SafeArea" type="MarginContainer" parent="."]
-layout_mode = 3
+[node name="SafeArea" type="MarginContainer" parent="Overlay"]
+layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
-offset_left = 24.0
-offset_top = 20.0
-offset_right = -24.0
-offset_bottom = -20.0
 grow_horizontal = 2
 grow_vertical = 2
 mouse_filter = 1
-
-[node name="Frame" type="PanelContainer" parent="SafeArea"]
-layout_mode = 2
-
-[node name="FrameMargin" type="MarginContainer" parent="SafeArea/Frame"]
-layout_mode = 2
-theme_override_constants/margin_left = 25
+theme_override_constants/margin_left = 24
 theme_override_constants/margin_top = 18
-theme_override_constants/margin_right = 25
-theme_override_constants/margin_bottom = 16
+theme_override_constants/margin_right = 24
+theme_override_constants/margin_bottom = 18
 
-[node name="Layout" type="VBoxContainer" parent="SafeArea/Frame/FrameMargin"]
+[node name="Frame" type="PanelContainer" parent="Overlay/SafeArea"]
 layout_mode = 2
-theme_override_constants/separation = 10
 
-[node name="Header" type="HBoxContainer" parent="SafeArea/Frame/FrameMargin/Layout"]
+[node name="FrameMargin" type="MarginContainer" parent="Overlay/SafeArea/Frame"]
+layout_mode = 2
+theme_override_constants/margin_left = 22
+theme_override_constants/margin_top = 14
+theme_override_constants/margin_right = 22
+theme_override_constants/margin_bottom = 12
+
+[node name="Layout" type="VBoxContainer" parent="Overlay/SafeArea/Frame/FrameMargin"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="Header" type="BoxContainer" parent="Overlay/SafeArea/Frame/FrameMargin/Layout"]
 layout_mode = 2
 theme_override_constants/separation = 18
 
-[node name="Title" type="Label" parent="SafeArea/Frame/FrameMargin/Layout/Header"]
+[node name="TitleBlock" type="VBoxContainer" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Header"]
 layout_mode = 2
 size_flags_horizontal = 3
+theme_override_constants/separation = 0
+
+[node name="Eyebrow" type="Label" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Header/TitleBlock"]
+layout_mode = 2
+text = "SPACEFACTORY // CARGO INTERFACE"
+theme_override_colors/font_color = Color(0.18, 0.63, 0.78, 0.9)
+theme_override_font_sizes/font_size = 10
+
+[node name="Title" type="Label" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Header/TitleBlock"]
+layout_mode = 2
 text = "INVENTAR"
 theme_override_colors/font_color = Color(0.91, 0.98, 1, 1)
-theme_override_colors/font_shadow_color = Color(0, 0.57, 0.86, 0.55)
-theme_override_constants/shadow_offset_x = 2
+theme_override_colors/font_shadow_color = Color(0, 0.45, 0.68, 0.42)
+theme_override_constants/shadow_offset_x = 1
 theme_override_constants/shadow_offset_y = 2
-theme_override_font_sizes/font_size = 32
+theme_override_font_sizes/font_size = 29
 
-[node name="Mode" type="Label" parent="SafeArea/Frame/FrameMargin/Layout/Header"]
+[node name="Meta" type="VBoxContainer" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Header"]
 layout_mode = 2
-text = "ASTRONAUT • PERSÖNLICH"
+size_flags_horizontal = 3
+theme_override_constants/separation = 2
+
+[node name="Mode" type="Label" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Header/Meta"]
+layout_mode = 2
+text = "ASTRONAUT  /  PERSOENLICH"
 horizontal_alignment = 2
-vertical_alignment = 1
-theme_override_colors/font_color = Color(0.18, 0.78, 1, 0.95)
-theme_override_font_sizes/font_size = 14
-
-[node name="HeaderRule" type="HSeparator" parent="SafeArea/Frame/FrameMargin/Layout"]
-layout_mode = 2
-
-[node name="BodyScroll" type="ScrollContainer" parent="SafeArea/Frame/FrameMargin/Layout"]
-layout_mode = 2
-size_flags_horizontal = 3
-size_flags_vertical = 3
-horizontal_scroll_mode = 1
-vertical_scroll_mode = 1
-
-[node name="InventoryColumns" type="BoxContainer" parent="SafeArea/Frame/FrameMargin/Layout/BodyScroll"]
-layout_mode = 2
-size_flags_horizontal = 3
-size_flags_vertical = 3
-theme_override_constants/separation = 18
-
-[node name="AstronautInventory" parent="SafeArea/Frame/FrameMargin/Layout/BodyScroll/InventoryColumns" instance=ExtResource("3_panel")]
-custom_minimum_size = Vector2(365, 435)
-layout_mode = 2
-
-[node name="ShipInventory" parent="SafeArea/Frame/FrameMargin/Layout/BodyScroll/InventoryColumns" instance=ExtResource("3_panel")]
-custom_minimum_size = Vector2(735, 435)
-layout_mode = 2
-
-[node name="FooterRule" type="HSeparator" parent="SafeArea/Frame/FrameMargin/Layout"]
-layout_mode = 2
-
-[node name="Footer" type="HBoxContainer" parent="SafeArea/Frame/FrameMargin/Layout"]
-layout_mode = 2
-theme_override_constants/separation = 18
-
-[node name="Status" type="Label" parent="SafeArea/Frame/FrameMargin/Layout/Footer"]
-layout_mode = 2
-size_flags_horizontal = 3
-text = "Stapel mit der linken Maustaste verschieben."
-theme_override_colors/font_color = Color(0.31, 0.79, 0.93, 0.95)
+clip_text = true
+theme_override_colors/font_color = Color(0.2, 0.78, 0.98, 0.95)
 theme_override_font_sizes/font_size = 13
 
-[node name="Hint" type="Label" parent="SafeArea/Frame/FrameMargin/Layout/Footer"]
+[node name="Selection" type="Label" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Header/Meta"]
 layout_mode = 2
-text = "LINKSKLICK + ZIEHEN  Verschieben    I / ESC  Schließen"
+text = "AUSWAHL  —  KEIN GEGENSTAND"
 horizontal_alignment = 2
-theme_override_colors/font_color = Color(0.53, 0.65, 0.71, 1)
+clip_text = true
+text_overrun_behavior = 3
+theme_override_colors/font_color = Color(0.56, 0.69, 0.75, 1)
+theme_override_font_sizes/font_size = 11
+
+[node name="HeaderRule" type="HSeparator" parent="Overlay/SafeArea/Frame/FrameMargin/Layout"]
+layout_mode = 2
+
+[node name="BodyScroll" type="ScrollContainer" parent="Overlay/SafeArea/Frame/FrameMargin/Layout"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+horizontal_scroll_mode = 3
+vertical_scroll_mode = 1
+
+[node name="InventoryColumns" type="BoxContainer" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/BodyScroll"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+theme_override_constants/separation = 14
+
+[node name="AstronautInventory" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/BodyScroll/InventoryColumns" instance=ExtResource("3_panel")]
+layout_mode = 2
+
+[node name="ShipInventory" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/BodyScroll/InventoryColumns" instance=ExtResource("3_panel")]
+layout_mode = 2
+
+[node name="FooterRule" type="HSeparator" parent="Overlay/SafeArea/Frame/FrameMargin/Layout"]
+layout_mode = 2
+
+[node name="Footer" type="BoxContainer" parent="Overlay/SafeArea/Frame/FrameMargin/Layout"]
+layout_mode = 2
+theme_override_constants/separation = 16
+
+[node name="Status" type="Label" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Footer"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Bereit."
+clip_text = true
+text_overrun_behavior = 3
+theme_override_colors/font_color = Color(0.32, 0.78, 0.91, 0.96)
 theme_override_font_sizes/font_size = 12
+
+[node name="Hint" type="Label" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Footer"]
+layout_mode = 2
+text = "LINKSKLICK + ZIEHEN   TRANSFER    |    I / ESC   SCHLIESSEN"
+horizontal_alignment = 2
+clip_text = true
+theme_override_colors/font_color = Color(0.48, 0.61, 0.67, 1)
+theme_override_font_sizes/font_size = 11

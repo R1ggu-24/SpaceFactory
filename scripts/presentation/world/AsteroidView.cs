@@ -1,4 +1,6 @@
 using Godot;
+using SpaceFactory.Core.Common;
+using SpaceFactory.Core.Items;
 using SpaceFactory.Core.World.Asteroids;
 using SpaceFactory.Core.Settings;
 using SpaceFactory.Presentation.Settings;
@@ -8,12 +10,35 @@ namespace SpaceFactory.Presentation.World;
 public partial class AsteroidView : StaticBody2D
 {
     private static readonly Vector2 LightDirection = new Vector2(-0.68f, -0.74f).Normalized();
+#if DEBUG
+    private static bool _buildGeometrySmokeCompleted;
+#endif
     private AsteroidDefinition _definition = null!;
     private Vector2[] _outline = [];
+    private IReadOnlyList<Vector2> _readOnlyOutline = Array.Empty<Vector2>();
     private Vector2[] _simplifiedOutline = [];
     private Color _baseColor;
     private CollisionPolygon2D? _collision;
     private bool _useDetailedCollision = true;
+
+    public string CometId => _definition.Id;
+
+    public double Radius => _definition.Radius;
+
+    public AsteroidSize Size => _definition.Size;
+
+    public double BuildableRadius => _definition.SurfaceProfile?.BuildableRadius ?? 0;
+
+    public IReadOnlyList<Vector2> LocalOutline => _readOnlyOutline;
+
+    public IReadOnlyList<AsteroidCrater> Craters => _definition.Craters;
+
+    public bool SupportsBuilding =>
+        _definition.Size is AsteroidSize.Large or AsteroidSize.Huge &&
+        _definition.SurfaceProfile is not null;
+
+    public bool SupportsShipDocking =>
+        _definition.Size is AsteroidSize.Large or AsteroidSize.Huge;
 
     public void Configure(AsteroidDefinition definition)
     {
@@ -21,6 +46,7 @@ public partial class AsteroidView : StaticBody2D
         Rotation = (float)definition.RotationRadians;
         _baseColor = CreateBaseColor(definition);
         _outline = CreateOutline(definition);
+        _readOnlyOutline = Array.AsReadOnly(_outline);
         _simplifiedOutline = SimplifyPolygon(_outline, 10);
     }
 
@@ -32,7 +58,60 @@ public partial class AsteroidView : StaticBody2D
             Polygon = _useDetailedCollision ? _outline : _simplifiedOutline,
         };
         AddChild(_collision);
+#if DEBUG
+        if (!_buildGeometrySmokeCompleted && IsHeadlessRuntime())
+        {
+            RunBuildGeometrySmokeTest();
+            SpaceFactory.Presentation.Building.MachinePlacementPreview.RunGeometrySmokeTest();
+        }
+#endif
         QueueRedraw();
+    }
+
+    public bool ContainsWorldPoint(Vector2 worldPosition) => ContainsLocalPoint(ToLocal(worldPosition));
+
+    public bool ContainsLocalPoint(Vector2 localPosition) =>
+        _outline.Length >= 3 && IsPointInsidePolygon(localPosition, _outline);
+
+    public AsteroidBuildSurfaceFailure EvaluateBuildFootprint(IReadOnlyList<Vector2> localFootprint)
+    {
+        ArgumentNullException.ThrowIfNull(localFootprint);
+        if (localFootprint.Count < 3)
+        {
+            throw new ArgumentException("A machine footprint needs at least three points.", nameof(localFootprint));
+        }
+
+        if (_definition.Size is not (AsteroidSize.Large or AsteroidSize.Huge))
+        {
+            return AsteroidBuildSurfaceFailure.UnsupportedCometSize;
+        }
+
+        if (_definition.SurfaceProfile is null)
+        {
+            return AsteroidBuildSurfaceFailure.MissingSurfaceProfile;
+        }
+
+        var samples = SampleFootprint(localFootprint);
+        var buildableRadiusSquared = (float)(_definition.SurfaceProfile.BuildableRadius *
+                                              _definition.SurfaceProfile.BuildableRadius);
+        if (samples.Any(sample => sample.LengthSquared() > buildableRadiusSquared))
+        {
+            return AsteroidBuildSurfaceFailure.OutsideBuildableRadius;
+        }
+
+        if (samples.Any(sample => !ContainsLocalPoint(sample)))
+        {
+            return AsteroidBuildSurfaceFailure.OutsideOutline;
+        }
+
+        if (_definition.Craters.Any(crater => CraterIntersectsFootprint(crater, localFootprint)))
+        {
+            return AsteroidBuildSurfaceFailure.Crater;
+        }
+
+        return IsTerrainUneven(samples)
+            ? AsteroidBuildSurfaceFailure.UnevenTerrain
+            : AsteroidBuildSurfaceFailure.None;
     }
 
     public void SetDetailedCollision(bool detailed)
@@ -47,6 +126,47 @@ public partial class AsteroidView : StaticBody2D
         {
             _collision.Polygon = detailed ? _outline : _simplifiedOutline;
         }
+    }
+
+    public bool TryGetClosestSurfacePoint(
+        Vector2 worldPosition,
+        out Vector2 surfacePoint,
+        out Vector2 outwardNormal,
+        out float distance)
+    {
+        surfacePoint = default;
+        outwardNormal = Vector2.Up;
+        distance = float.PositiveInfinity;
+        if (_outline.Length < 2)
+        {
+            return false;
+        }
+
+        var localPosition = ToLocal(worldPosition);
+        var closestLocal = Vector2.Zero;
+        var closestDistanceSquared = float.PositiveInfinity;
+        for (var index = 0; index < _outline.Length; index++)
+        {
+            var start = _outline[index];
+            var end = _outline[(index + 1) % _outline.Length];
+            var closest = ClosestPointOnSegment(localPosition, start, end);
+            var distanceSquared = localPosition.DistanceSquaredTo(closest);
+            if (distanceSquared >= closestDistanceSquared)
+            {
+                continue;
+            }
+
+            closestDistanceSquared = distanceSquared;
+            closestLocal = closest;
+        }
+
+        surfacePoint = ToGlobal(closestLocal);
+        var localNormal = closestLocal.LengthSquared() > 0.001f
+            ? closestLocal.Normalized()
+            : localPosition.Normalized();
+        outwardNormal = (ToGlobal(closestLocal + localNormal) - surfacePoint).Normalized();
+        distance = worldPosition.DistanceTo(surfacePoint);
+        return outwardNormal.LengthSquared() > 0.5f;
     }
 
     public override void _Draw()
@@ -314,6 +434,221 @@ public partial class AsteroidView : StaticBody2D
         }
     }
 
+    private IReadOnlyList<Vector2> SampleFootprint(IReadOnlyList<Vector2> footprint)
+    {
+        var samples = new List<Vector2>(footprint.Count * 5 + 1);
+        var center = Vector2.Zero;
+        for (var index = 0; index < footprint.Count; index++)
+        {
+            var start = footprint[index];
+            var end = footprint[(index + 1) % footprint.Count];
+            center += start;
+            var segmentCount = Math.Max(1, Mathf.CeilToInt(start.DistanceTo(end) / 12f));
+            for (var segment = 0; segment < segmentCount; segment++)
+            {
+                samples.Add(start.Lerp(end, segment / (float)segmentCount));
+            }
+        }
+
+        samples.Add(center / footprint.Count);
+        return samples;
+    }
+
+    private bool CraterIntersectsFootprint(
+        AsteroidCrater crater,
+        IReadOnlyList<Vector2> footprint)
+    {
+        var center = new Vector2(
+            (float)(crater.XFactor * _definition.Radius),
+            (float)(crater.YFactor * _definition.Radius));
+        var unsafeRadius = (float)(crater.RadiusFactor * _definition.Radius) *
+                           (1.10f + ((float)crater.Depth * 0.20f));
+
+        if (IsPointInsidePolygon(center, footprint))
+        {
+            return true;
+        }
+
+        var unsafeRadiusSquared = unsafeRadius * unsafeRadius;
+        for (var index = 0; index < footprint.Count; index++)
+        {
+            var start = footprint[index];
+            var end = footprint[(index + 1) % footprint.Count];
+            if (ClosestPointOnSegment(center, start, end).DistanceSquaredTo(center) <= unsafeRadiusSquared)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private bool IsTerrainUneven(IReadOnlyList<Vector2> samples)
+    {
+        var minimumHeight = float.PositiveInfinity;
+        var maximumHeight = float.NegativeInfinity;
+        foreach (var sample in samples)
+        {
+            var height = GetTerrainHeight(sample);
+            minimumHeight = Math.Min(minimumHeight, height);
+            maximumHeight = Math.Max(maximumHeight, height);
+        }
+
+        return maximumHeight - minimumHeight > 0.24f;
+    }
+
+    private float GetTerrainHeight(Vector2 localPosition)
+    {
+        var radius = Mathf.Max(1, (float)_definition.Radius);
+        var normalized = localPosition / radius;
+        var seed = _definition.SurfaceProfile?.TerrainSeed ?? _definition.VisualSeed;
+        var phaseA = ((seed & 0xffffUL) / 65_535f) * Mathf.Tau;
+        var phaseB = (((seed >> 16) & 0xffffUL) / 65_535f) * Mathf.Tau;
+        var roughnessAmplitude = 0.055f + ((float)_definition.SurfaceRoughness * 0.11f);
+        var elevationAmplitude = 0.045f + ((float)_definition.ElevationVariation * 0.105f);
+        return Mathf.Sin((normalized.X * 5.2f) + phaseA) * roughnessAmplitude +
+               Mathf.Cos((normalized.Y * 4.4f) + phaseB) * elevationAmplitude +
+               Mathf.Sin(((normalized.X + normalized.Y) * 7.1f) + phaseA - phaseB) * 0.035f;
+    }
+
+    private static bool IsPointInsidePolygon(Vector2 point, IReadOnlyList<Vector2> polygon)
+    {
+        var inside = false;
+        for (var index = 0; index < polygon.Count; index++)
+        {
+            var current = polygon[index];
+            var previous = polygon[(index + polygon.Count - 1) % polygon.Count];
+            if (ClosestPointOnSegment(point, previous, current).DistanceSquaredTo(point) <= 0.0001f)
+            {
+                return true;
+            }
+
+            var crossesHorizontalRay = (current.Y > point.Y) != (previous.Y > point.Y);
+            if (!crossesHorizontalRay)
+            {
+                continue;
+            }
+
+            var intersectionX = ((previous.X - current.X) * (point.Y - current.Y) /
+                                 (previous.Y - current.Y)) + current.X;
+            if (point.X < intersectionX)
+            {
+                inside = !inside;
+            }
+        }
+
+        return inside;
+    }
+
+#if DEBUG
+    public void RunBuildGeometrySmokeTest()
+    {
+        var testSquare = new[]
+        {
+            new Vector2(-10, -10),
+            new Vector2(10, -10),
+            new Vector2(10, 10),
+            new Vector2(-10, 10),
+        };
+        RequireBuildGeometryCondition(IsPointInsidePolygon(Vector2.Zero, testSquare),
+            "polygon center must be contained");
+        RequireBuildGeometryCondition(!IsPointInsidePolygon(new Vector2(30, 0), testSquare),
+            "point beyond polygon must be rejected");
+        RequireBuildGeometryCondition(ContainsLocalPoint(Vector2.Zero),
+            "generated comet outline must contain its center");
+
+        var buildableSmokeComet = CreateBuildSmokeComet(AsteroidSize.Large, includeSurface: true, includeCrater: false);
+        var craterSmokeComet = CreateBuildSmokeComet(AsteroidSize.Huge, includeSurface: true, includeCrater: true);
+        var smallSmokeComet = CreateBuildSmokeComet(AsteroidSize.Medium, includeSurface: false, includeCrater: false);
+        var machineFootprint = new[]
+        {
+            new Vector2(-48, -36),
+            new Vector2(48, -36),
+            new Vector2(48, 36),
+            new Vector2(-48, 36),
+        };
+        RequireBuildGeometryCondition(
+            buildableSmokeComet.EvaluateBuildFootprint(machineFootprint) == AsteroidBuildSurfaceFailure.None,
+            "flat large-comet center must accept a complete machine footprint");
+        RequireBuildGeometryCondition(
+            craterSmokeComet.EvaluateBuildFootprint(machineFootprint) == AsteroidBuildSurfaceFailure.Crater,
+            "a crater crossing the footprint must reject construction");
+        RequireBuildGeometryCondition(
+            smallSmokeComet.EvaluateBuildFootprint(machineFootprint) == AsteroidBuildSurfaceFailure.UnsupportedCometSize,
+            "medium comets must reject construction by actual size");
+        buildableSmokeComet.Free();
+        craterSmokeComet.Free();
+        smallSmokeComet.Free();
+
+        var tinyFootprint = new[]
+        {
+            new Vector2(-6, -6),
+            new Vector2(6, -6),
+            new Vector2(6, 6),
+            new Vector2(-6, 6),
+        };
+        var result = EvaluateBuildFootprint(tinyFootprint);
+        if (SupportsBuilding)
+        {
+            RequireBuildGeometryCondition(result is not (
+                    AsteroidBuildSurfaceFailure.UnsupportedCometSize or
+                    AsteroidBuildSurfaceFailure.MissingSurfaceProfile),
+                "landable large comets must reach geometric surface validation");
+        }
+        else
+        {
+            RequireBuildGeometryCondition(result is
+                    AsteroidBuildSurfaceFailure.UnsupportedCometSize or
+                    AsteroidBuildSurfaceFailure.MissingSurfaceProfile,
+                "unsupported comets must reject construction before geometry checks");
+        }
+
+        _buildGeometrySmokeCompleted = true;
+        GD.Print("ASTEROID_BUILD_GEOMETRY_SMOKE_OK: size/profile, outline, radius, craters, terrain");
+    }
+
+    private static AsteroidView CreateBuildSmokeComet(
+        AsteroidSize size,
+        bool includeSurface,
+        bool includeCrater)
+    {
+        const double radius = 1_000;
+        IReadOnlyList<AsteroidCrater> craters = includeCrater
+            ? [new AsteroidCrater(0, 0, 0.08, 0.5, 0)]
+            : [];
+        var profile = includeSurface
+            ? new AsteroidSurfaceProfile("smoke:surface", 820, 650, 2, 112_358, 132_134, "smoke")
+            : null;
+        var view = new AsteroidView();
+        view.Configure(new AsteroidDefinition(
+            "smoke:build",
+            new WorldPosition(0, 0),
+            radius,
+            size,
+            "smoke",
+            new ItemId("iron_ore"),
+            314_159,
+            0,
+            0.18,
+            0.12,
+            craters,
+            profile));
+        return view;
+    }
+
+    private static void RequireBuildGeometryCondition(bool condition, string message)
+    {
+        if (!condition)
+        {
+            throw new InvalidOperationException($"Asteroid build geometry smoke test failed: {message}.");
+        }
+    }
+
+    private static bool IsHeadlessRuntime() =>
+        OS.HasFeature("headless") ||
+        DisplayServer.GetName().Contains("headless", StringComparison.OrdinalIgnoreCase);
+#endif
+
     private static Color CreateBaseColor(AsteroidDefinition definition)
     {
         var paletteColor = definition.ResourceType.Value == "iron_ore"
@@ -412,5 +747,18 @@ public partial class AsteroidView : StaticBody2D
         }
 
         return shifted;
+    }
+
+    private static Vector2 ClosestPointOnSegment(Vector2 point, Vector2 start, Vector2 end)
+    {
+        var segment = end - start;
+        var lengthSquared = segment.LengthSquared();
+        if (lengthSquared <= 0.0001f)
+        {
+            return start;
+        }
+
+        var factor = Mathf.Clamp((point - start).Dot(segment) / lengthSquared, 0, 1);
+        return start + (segment * factor);
     }
 }

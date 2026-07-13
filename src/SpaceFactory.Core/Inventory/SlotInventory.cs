@@ -33,10 +33,6 @@ public sealed class SlotInventory
 
     public int MaximumStackSize { get; }
 
-    public int Capacity => SlotCount * MaximumStackSize;
-
-    public int UsedCapacity => TotalItemCount;
-
     public IReadOnlyList<InventorySlot> Slots => _readOnlySlots;
 
     public int UsedSlotCount => _slots.Count(slot => !slot.IsEmpty);
