@@ -18,6 +18,7 @@ public enum MachineKind
     Generator,
     Storage,
     Research,
+    Infrastructure,
 }
 
 public sealed class MachineDefinition
@@ -128,6 +129,7 @@ public static class MachineDefinitionIds
     public static readonly MachineDefinitionId FuelGenerator = new("fuel_generator");
     public static readonly MachineDefinitionId StorageContainer = new("storage_container");
     public static readonly MachineDefinitionId ResearchStation = new("research_station");
+    public static readonly MachineDefinitionId PowerPole = new("power_pole");
 }
 
 public static class ProductionConfiguration

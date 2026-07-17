@@ -197,7 +197,12 @@ public sealed class DeterministicWorldGenerator : IWorldGenerator
         return new AsteroidSurfaceProfile(
             $"{cometId}:surface",
             radius * (size == AsteroidSize.Huge ? 0.82 : 0.78),
-            radius * (size == AsteroidSize.Huge ? 0.65 : 0.52),
+            // The polygon, crater and terrain checks remain authoritative.  The old
+            // 52/65 percent radii rejected a large part of visibly flat ground before
+            // those precise checks even ran, which made valid-looking placements report
+            // "not enough room".  These broader coarse radii expose the useful surface
+            // while the actual generated outline still prevents edge overhang.
+            radius * (size == AsteroidSize.Huge ? 0.78 : 0.70),
             size == AsteroidSize.Huge ? 4 : 1,
             visualSeed ^ 0x5445525241494EUL,
             visualSeed ^ 0x5245534F55524345UL,

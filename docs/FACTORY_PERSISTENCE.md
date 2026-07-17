@@ -14,26 +14,36 @@ Der Zustand enthält:
 - alle `MachineStateSnapshot`s mit Kometen-Placement, Rezept, Ein-/Aus-Schalter, Status,
   Bau- und Produktionsfortschritt, laufendem Batch, Generatorbrennstoff sowie Ein- und
   Ausgabeinventaren;
+- alle `MachineConnectionSnapshot`s mit stabiler Verbindungs-ID, Typ und den Maschinen-
+  und Port-IDs beider Endpunkte;
 - den vollständigen `ResearchStateSnapshot`;
 - ob der kostenlose erste Basisgenerator bereits gebaut wurde;
 - den aktuellen Raumschifftreibstoff;
 - alle belegten Slots des Astronauten-Inventars (20 Slots) und des
   Raumschifflagers (50 Slots) mit exakter Slotposition, Item-ID und Menge;
 - die ID der Forschungsstation, an der eine laufende Forschung gebunden ist;
+- Stromnetz-Schalter, Schutzschalter und Überlast-Timer;
+- Raumschiff-Stromanschluss-Schalter A/B;
+- Raumschiff-Dockingpose mit Kometen-ID, relativer Position/Rotation, Landebeinzustand und globaler Fallbackpose;
 - je Komet den letzten Simulationszeitpunkt als UTC-Zeitstempel.
 
-Schema v2 ergänzt die beiden Spielerinventare und die aktive Forschungsstation. Bestehende
-v1-Spielstände werden beim Lesen automatisch auf v2 migriert; da v1 diese Informationen nicht
-enthielt, starten beide Inventare dabei leer und die Stationsbindung ist `null`. Beim nächsten
-Speichern wird ausschließlich das aktuelle v2-Format geschrieben. Die Item-ID ist absichtlich
-katalogunabhängig gespeichert, damit Rohstoffe, Zwischenprodukte und Behälter denselben
-verlustfreien Speicherpfad verwenden.
+Schema v2 ergänzte die beiden Spielerinventare und die aktive Forschungsstation. Schema v3
+ergänzte die Maschinenverbindungen. Schema v4 ergänzt die getrennten Stromnetz-Zustände,
+Raumschiff-Stromanschlüsse und Dockingpose. Bestehende v1-, v2- und v3-Spielstände werden beim Lesen
+automatisch auf v4 migriert; ihre Verbindungsliste ist leer, sofern das Ursprungsschema noch keine Verbindungen kannte. Da v1 auch keine Spielerinventare
+oder Stationsbindung enthielt, starten diese Inventare dabei leer und die Stationsbindung ist
+`null`. Beim nächsten Speichern wird ausschließlich das aktuelle v4-Format geschrieben. Die
+Item-ID ist absichtlich katalogunabhängig gespeichert, damit Rohstoffe, Zwischenprodukte und
+Behälter denselben verlustfreien Speicherpfad verwenden.
 
 Fehlt die Datei oder ist sie leer, beschädigt, unvollständig, doppelt belegt oder besitzt sie
 eine nicht unterstützte Version, liefert der Store einen sicheren leeren Startzustand. Maschinen-
-IDs, Slotindizes, Mengen, starke IDs, endliche Fortschrittswerte, Forschung und Tankgrenzen werden
-vor der Verwendung validiert. Ein valides `factory_state.json.tmp` kann nach einem unterbrochenen
-ersten Schreibvorgang zur Wiederherstellung verwendet werden.
+IDs, Slotindizes, Mengen, starke IDs, endliche Fortschrittswerte, Forschung, Tankgrenzen,
+Stromnetz-Timer, Schiffanschlusszustände und Dockingkoordinaten werden vor der Verwendung
+validiert. Verbindungen benötigen eindeutige IDs, vorhandene platzierte Maschinen oder gültige
+Schiff-Stromendpunkte auf demselben Kometen sowie eindeutige Endpunktpaare. Ein valides
+`factory_state.json.tmp` kann nach einem unterbrochenen ersten Schreibvorgang zur
+Wiederherstellung verwendet werden.
 
 `InventoryStatePersistence` bildet zwischen `SlotInventory` und den primitiven
 `InventorySlotState`-Einträgen ab. Die Wiederherstellung löscht den Zielinhalt erst nach einer

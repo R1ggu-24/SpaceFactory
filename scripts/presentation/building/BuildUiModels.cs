@@ -11,6 +11,7 @@ public enum BuildMenuCategory
     Processing,
     Manufacturing,
     Energy,
+    Logistics,
     Storage,
     Research,
 }
@@ -27,6 +28,11 @@ public enum MachineGlyph
     Refinery,
     BasicGenerator,
     FuelGenerator,
+    PowerPole,
+    PowerCable,
+    ConveyorBelt,
+    LiquidPipe,
+    GasPipe,
     Storage,
     Research,
 }
@@ -118,6 +124,7 @@ public static class BuildMenuCategoryPresentation
         BuildMenuCategory.Processing,
         BuildMenuCategory.Manufacturing,
         BuildMenuCategory.Energy,
+        BuildMenuCategory.Logistics,
         BuildMenuCategory.Storage,
         BuildMenuCategory.Research,
     ];
@@ -127,6 +134,7 @@ public static class BuildMenuCategoryPresentation
         BuildMenuCategory.Processing => "VERARBEITUNG",
         BuildMenuCategory.Manufacturing => "HERSTELLUNG",
         BuildMenuCategory.Energy => "ENERGIE",
+        BuildMenuCategory.Logistics => "TRANSPORT",
         BuildMenuCategory.Storage => "LAGERUNG",
         BuildMenuCategory.Research => "FORSCHUNG",
         _ => category.ToString().ToUpperInvariant(),

@@ -211,7 +211,7 @@ public partial class BuildMenuController : CanvasLayer
             SetMachineCatalog(CreateSmokeCatalog());
             if (_categoryButtons.Count != BuildMenuCategoryPresentation.OrderedCategories.Count)
             {
-                throw new InvalidOperationException("Build menu did not construct all five category controls.");
+                throw new InvalidOperationException("Build menu did not construct all six category controls.");
             }
 
             foreach (var category in BuildMenuCategoryPresentation.OrderedCategories)
@@ -247,7 +247,7 @@ public partial class BuildMenuController : CanvasLayer
             RefreshCategoryCounts();
         }
 
-        GD.Print("BUILD_MENU_UI_SMOKE_OK: 5 categories, locked/available costs, responsive 800-2560, no horizontal overflow");
+        GD.Print("BUILD_MENU_UI_SMOKE_OK: 6 categories, machines/logistics, responsive 800-2560, no horizontal overflow");
     }
 
     private void BuildCategoryButtons()
@@ -310,10 +310,14 @@ public partial class BuildMenuController : CanvasLayer
 
         var title = BuildMenuCategoryPresentation.GetDisplayName(_selectedCategory);
         _catalogTitle.Text = title;
-        _catalogCount.Text = $"{_cards.Count:00} MASCHINEN";
+        _catalogCount.Text = _selectedCategory == BuildMenuCategory.Logistics
+            ? $"{_cards.Count:00} VERBINDUNGEN"
+            : $"{_cards.Count:00} MASCHINEN";
         _status.Text = _cards.Count == 0
             ? "In dieser Kategorie sind noch keine Maschinen verfügbar."
-            : "Wähle eine Maschine, um den Platzierungsmodus zu starten.";
+            : _selectedCategory == BuildMenuCategory.Logistics
+                ? "Wähle einen Verbindungstyp und danach Ausgangs- und Zielmaschine."
+                : "Wähle eine Maschine, um den Platzierungsmodus zu starten.";
         RefreshCategoryCounts();
     }
 
@@ -397,6 +401,7 @@ public partial class BuildMenuController : CanvasLayer
             new("smelter", "Schmelzer", "Gewinnt reine Metalle aus Erzen.", "Produziert Metallbarren", BuildMenuCategory.Processing, MachineGlyph.Smelter, [available], true),
             new("constructor", "Konstruktor", "Fertigt grundlegende Bauteile.", "Produziert Platten und Kabel", BuildMenuCategory.Manufacturing, MachineGlyph.Constructor, [available], true),
             new("generator", "Basisgenerator", "Kompakte Startenergie.", "Versorgt erste Maschinen", BuildMenuCategory.Energy, MachineGlyph.BasicGenerator, [], true),
+            new("power_cable", "Stromkabel", "Verbindet lokale Stromnetze.", "Verteilt Energie zwischen Maschinen", BuildMenuCategory.Logistics, MachineGlyph.PowerCable, [available], true),
             new("storage", "Lagercontainer", "Lagert Materialien sicher.", "Zusätzlicher Stauraum", BuildMenuCategory.Storage, MachineGlyph.Storage, [available], true),
             new("research", "Forschungsstation", "Erschliesst neue Technologien.", "Schaltet Forschungen frei", BuildMenuCategory.Research, MachineGlyph.Research, [available, missing], false, "Fortgeschrittene Elektronik erforderlich"),
         ];

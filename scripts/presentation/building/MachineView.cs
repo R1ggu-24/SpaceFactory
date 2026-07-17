@@ -1,4 +1,5 @@
 using Godot;
+using SpaceFactory.Core.Power;
 using SpaceFactory.Core.Production;
 using SpaceFactory.Presentation.World;
 
@@ -8,6 +9,11 @@ public partial class MachineView : StaticBody2D
 {
     public const uint MachineCollisionLayer = 1u << 3;
 
+    private static readonly Color Titanium = new(0.22f, 0.25f, 0.27f);
+    private static readonly Color DarkMetal = new(0.055f, 0.07f, 0.078f);
+    private static readonly Color Recess = new(0.012f, 0.021f, 0.026f);
+    private static readonly Color Warning = new(0.92f, 0.68f, 0.18f);
+
     private MachineState? _state;
     private MachinePresentationDefinition? _presentation;
     private AsteroidView? _hostComet;
@@ -15,6 +21,7 @@ public partial class MachineView : StaticBody2D
     private Label? _statusLabel;
     private float _visualConstructionProgress;
     private bool _constructionVisualRunning;
+    private float _animationSeconds;
 
     public MachineInstanceId InstanceId =>
         _state?.InstanceId ?? throw new InvalidOperationException("Machine view is not configured.");
@@ -56,6 +63,7 @@ public partial class MachineView : StaticBody2D
         CollisionLayer = MachineCollisionLayer;
         CollisionMask = 0;
         InputPickable = true;
+        ZIndex = 4;
 
         if (GetParent() is null)
         {
@@ -82,25 +90,40 @@ public partial class MachineView : StaticBody2D
 
     public override void _Process(double delta)
     {
-        if (!_constructionVisualRunning || _state is null)
+        if (_state is null)
         {
             return;
         }
 
-        var duration = Math.Max(0.001, _state.Definition.ConstructionDurationSeconds);
-        var previous = _visualConstructionProgress;
-        _visualConstructionProgress = Mathf.Min(
-            1,
-            _visualConstructionProgress + ((float)delta / (float)duration));
-        if (_visualConstructionProgress >= 0.999f || _state.IsConstructionComplete)
+        var redraw = false;
+        if (_state.IsConstructionComplete && _state.Status == MachineOperationStatus.Producing)
         {
-            _visualConstructionProgress = 1;
-            _constructionVisualRunning = false;
+            _animationSeconds = Mathf.PosMod(_animationSeconds + (float)delta, 120f);
+            redraw = true;
         }
 
-        if (!Mathf.IsEqualApprox(previous, _visualConstructionProgress))
+        if (_constructionVisualRunning)
         {
-            RefreshStatusLabel();
+            var duration = Math.Max(0.001, _state.Definition.ConstructionDurationSeconds);
+            var previous = _visualConstructionProgress;
+            _visualConstructionProgress = Mathf.Min(
+                1,
+                _visualConstructionProgress + ((float)delta / (float)duration));
+            if (_visualConstructionProgress >= 0.999f || _state.IsConstructionComplete)
+            {
+                _visualConstructionProgress = 1;
+                _constructionVisualRunning = false;
+            }
+
+            if (!Mathf.IsEqualApprox(previous, _visualConstructionProgress))
+            {
+                RefreshStatusLabel();
+                redraw = true;
+            }
+        }
+
+        if (redraw)
+        {
             QueueRedraw();
         }
     }
@@ -146,6 +169,42 @@ public partial class MachineView : StaticBody2D
         return true;
     }
 
+    /// <summary>
+    /// Stable local anchor used by cable, conveyor and pipe presentation. The
+    /// returned point follows machine rotation because it lives in local space.
+    /// </summary>
+    public Vector2 GetLocalConnectionAnchor(MachineConnectionAnchorKind anchor)
+    {
+        if (_presentation is null)
+        {
+            throw new InvalidOperationException("Machine view is not configured.");
+        }
+
+        return _presentation.GetConnectionAnchor(anchor);
+    }
+
+    public Vector2 GetWorldConnectionAnchor(MachineConnectionAnchorKind anchor) =>
+        ToGlobal(GetLocalConnectionAnchor(anchor));
+
+    /// <summary>
+    /// Number of physical power sockets represented by this machine. Regular
+    /// machines expose one socket; the compact distribution pole exposes six.
+    /// </summary>
+    public int PowerPortCount => _presentation?.PowerPortCount ?? 0;
+
+    public Vector2 GetLocalPowerPortAnchor(int portIndex)
+    {
+        if (_presentation is null)
+        {
+            throw new InvalidOperationException("Machine view is not configured.");
+        }
+
+        return _presentation.GetPowerPortAnchor(portIndex);
+    }
+
+    public Vector2 GetWorldPowerPortAnchor(int portIndex) =>
+        ToGlobal(GetLocalPowerPortAnchor(portIndex));
+
     public Vector2[] GetWorldFootprint(float padding = 0)
     {
         if (_presentation is null)
@@ -167,33 +226,31 @@ public partial class MachineView : StaticBody2D
         }
 
         var half = _presentation.Footprint * 0.5f;
-        var chassis = CreateBeveledRectangle(_presentation.Footprint, Mathf.Min(10, half.X * 0.18f));
+        var silhouette = CreateMachineSilhouette(_presentation.Glyph, _presentation.Footprint);
         var progressAlpha = _state.IsConstructionComplete
             ? 1
             : Mathf.Lerp(0.2f, 0.92f, _visualConstructionProgress);
         var body = new Color(_presentation.BodyColor, progressAlpha);
         var accent = new Color(_presentation.AccentColor, progressAlpha);
-        var shadow = chassis.Select(point => point + new Vector2(5, 7)).ToArray();
+        var shadow = silhouette.Select(point => point + new Vector2(5, 7)).ToArray();
 
-        DrawColoredPolygon(shadow, new Color(0, 0, 0, 0.46f * progressAlpha));
-        DrawColoredPolygon(chassis, body);
-        DrawPolyline([.. chassis, chassis[0]], accent, 2.2f, true);
+        DrawColoredPolygon(shadow, new Color(0, 0, 0, 0.48f * progressAlpha));
+        DrawColoredPolygon(silhouette, body);
+        DrawPolyline(Close(silhouette), new Color(Titanium.Lightened(0.2f), progressAlpha), 2.2f, true);
 
-        var inset = new Rect2(-half + new Vector2(9, 9), _presentation.Footprint - new Vector2(18, 18));
-        DrawRect(inset, new Color(_presentation.BodyColor.Darkened(0.35f), 0.88f * progressAlpha), true);
-        DrawRect(inset, new Color(_presentation.AccentColor.Darkened(0.28f), 0.78f * progressAlpha), false, 1.2f, true);
-        DrawLine(new Vector2(-half.X + 12, 0), new Vector2(half.X - 12, 0),
-            new Color(_presentation.AccentColor.Darkened(0.45f), 0.6f * progressAlpha), 1, true);
-        DrawMachineGlyph(_presentation.Glyph, accent, new Color(body.Lightened(0.28f), progressAlpha));
+        var innerSize = _presentation.Footprint - new Vector2(12, 12);
+        var inner = CreateMachineSilhouette(_presentation.Glyph, innerSize);
+        DrawColoredPolygon(inner, new Color(DarkMetal, 0.92f * progressAlpha));
+        DrawPolyline(Close(inner), new Color(_presentation.AccentColor.Darkened(0.4f), 0.7f * progressAlpha), 1.2f, true);
 
-        var statusColor = GetStatusColor(_state.Status);
-        DrawCircle(new Vector2(half.X - 12, -half.Y + 12), 4.2f, new Color(statusColor, progressAlpha));
-        DrawArc(new Vector2(half.X - 12, -half.Y + 12), 7.2f, 0, Mathf.Tau, 16,
-            new Color(statusColor, 0.36f * progressAlpha), 1.2f, true);
+        DrawCommonHardware(half, accent, progressAlpha);
+        DrawMachineAssembly(_presentation.Glyph, accent, progressAlpha);
+        DrawConnectionSockets(accent, progressAlpha);
+        DrawStatusIndicator(half, progressAlpha);
 
         if (!_state.IsConstructionComplete || _constructionVisualRunning)
         {
-            DrawConstructionHologram(half, chassis);
+            DrawConstructionHologram(half, silhouette);
         }
     }
 
@@ -250,11 +307,508 @@ public partial class MachineView : StaticBody2D
         _statusLabel.AddThemeColorOverride("font_color", GetStatusColor(_state.Status).Lightened(0.12f));
     }
 
-    private void DrawConstructionHologram(Vector2 half, IReadOnlyList<Vector2> chassis)
+    private void DrawCommonHardware(Vector2 half, Color accent, float alpha)
+    {
+        var screwColor = new Color(Titanium.Lightened(0.38f), 0.8f * alpha);
+        foreach (var point in new[]
+                 {
+                     new Vector2(-half.X + 9, -half.Y + 9),
+                     new Vector2(half.X - 9, -half.Y + 9),
+                     new Vector2(half.X - 9, half.Y - 9),
+                     new Vector2(-half.X + 9, half.Y - 9),
+                 })
+        {
+            DrawCircle(point, 1.7f, screwColor);
+            DrawLine(point + new Vector2(-1, 0), point + new Vector2(1, 0), new Color(Recess, alpha), 0.8f, true);
+        }
+
+        // Sparse seam and wear lines keep the metal readable without noisy texture.
+        DrawLine(new Vector2(-half.X + 14, -half.Y + 6), new Vector2(-half.X + 25, -half.Y + 6),
+            new Color(accent, 0.28f * alpha), 1, true);
+        DrawLine(new Vector2(half.X - 28, half.Y - 7), new Vector2(half.X - 14, half.Y - 7),
+            new Color(Titanium, 0.46f * alpha), 1, true);
+        DrawLine(new Vector2(-half.X + 18, half.Y - 9), new Vector2(-half.X + 26, half.Y - 12),
+            new Color(Titanium.Darkened(0.35f), 0.65f * alpha), 1, true);
+    }
+
+    private void DrawConnectionSockets(Color accent, float alpha)
+    {
+        if (_presentation is null)
+        {
+            return;
+        }
+
+        if (_presentation.Glyph == MachineGlyph.PowerPole)
+        {
+            for (var portIndex = 0; portIndex < _presentation.PowerPortCount; portIndex++)
+            {
+                DrawSocket(
+                    _presentation.GetPowerPortAnchor(portIndex),
+                    new Color(0.13f, 0.82f, 0.98f, 0.9f * alpha),
+                    4.1f);
+            }
+
+            return;
+        }
+
+        DrawSocket(_presentation.GetPowerPortAnchor(0), new Color(0.96f, 0.7f, 0.2f, alpha));
+        DrawSocket(_presentation.GetConnectionAnchor(MachineConnectionAnchorKind.ItemInput),
+            new Color(accent, 0.72f * alpha));
+        DrawSocket(_presentation.GetConnectionAnchor(MachineConnectionAnchorKind.ItemOutput),
+            new Color(0.32f, 0.88f, 0.65f, 0.78f * alpha));
+        DrawSocket(_presentation.GetConnectionAnchor(MachineConnectionAnchorKind.PipeInput),
+            new Color(0.22f, 0.65f, 0.96f, 0.68f * alpha), 3.2f);
+        DrawSocket(_presentation.GetConnectionAnchor(MachineConnectionAnchorKind.PipeOutput),
+            new Color(0.34f, 0.86f, 0.9f, 0.68f * alpha), 3.2f);
+    }
+
+    private void DrawSocket(Vector2 position, Color color, float radius = 3.8f)
+    {
+        DrawCircle(position, radius + 1.5f, new Color(Recess, color.A));
+        DrawArc(position, radius, 0, Mathf.Tau, 12, color, 1.3f, true);
+        DrawCircle(position, 1.25f, new Color(color, color.A * 0.75f));
+    }
+
+    private void DrawStatusIndicator(Vector2 half, float alpha)
+    {
+        if (_state is null)
+        {
+            return;
+        }
+
+        var statusColor = GetStatusColor(_state.Status);
+        var position = new Vector2(half.X - 13, -half.Y + 13);
+        var pulse = _state.Status == MachineOperationStatus.Producing
+            ? 0.72f + (Mathf.Sin(_animationSeconds * 5f) * 0.18f)
+            : 0.82f;
+        DrawRect(new Rect2(position - new Vector2(10, 5), new Vector2(20, 10)),
+            new Color(Recess, 0.88f * alpha), true);
+        for (var index = 0; index < 3; index++)
+        {
+            var lamp = position + new Vector2((index - 1) * 6, 0);
+            var lit = index == 1;
+            DrawCircle(lamp, 2.2f, lit
+                ? new Color(statusColor, pulse * alpha)
+                : new Color(statusColor.Darkened(0.72f), 0.5f * alpha));
+        }
+    }
+
+    private void DrawMachineAssembly(MachineGlyph glyph, Color accent, float alpha)
+    {
+        var producing = _state?.Status == MachineOperationStatus.Producing;
+        switch (glyph)
+        {
+            case MachineGlyph.Crusher:
+                DrawCrusher(accent, alpha, producing);
+                break;
+            case MachineGlyph.Smelter:
+                DrawSmelter(accent, alpha, producing);
+                break;
+            case MachineGlyph.Foundry:
+                DrawFoundry(accent, alpha, producing);
+                break;
+            case MachineGlyph.Constructor:
+                DrawConstructor(accent, alpha, producing);
+                break;
+            case MachineGlyph.Fabricator:
+                DrawFabricator(accent, alpha, producing);
+                break;
+            case MachineGlyph.WaterProcessor:
+                DrawWaterProcessor(accent, alpha, producing);
+                break;
+            case MachineGlyph.Electrolyzer:
+                DrawElectrolyzer(accent, alpha, producing);
+                break;
+            case MachineGlyph.Refinery:
+                DrawRefinery(accent, alpha, producing);
+                break;
+            case MachineGlyph.BasicGenerator:
+                DrawBasicGenerator(accent, alpha, producing);
+                break;
+            case MachineGlyph.FuelGenerator:
+                DrawFuelGenerator(accent, alpha, producing);
+                break;
+            case MachineGlyph.PowerPole:
+                DrawPowerPole(accent, alpha, producing);
+                break;
+            case MachineGlyph.Storage:
+                DrawStorage(accent, alpha);
+                break;
+            case MachineGlyph.Research:
+                DrawResearch(accent, alpha, producing);
+                break;
+        }
+    }
+
+    private void DrawCrusher(Color accent, float alpha, bool producing)
+    {
+        var hopper = new Vector2[] { new(-39, -24), new(-19, -18), new(-19, 18), new(-39, 24) };
+        DrawColoredPolygon(hopper, new Color(Recess, alpha));
+        DrawPolyline(Close(hopper), new Color(Titanium, alpha), 1.6f, true);
+        for (var index = -1; index <= 1; index += 2)
+        {
+            var x = index * 9f;
+            DrawRect(new Rect2(x - 5, -21, 10, 42), new Color(Titanium.Darkened(0.15f), alpha), true);
+            var offset = producing ? Mathf.PosMod(_animationSeconds * 18f * index, 8f) : 0;
+            for (var y = -17f; y <= 17; y += 8)
+            {
+                var toothY = Mathf.PosMod(y + offset + 21, 42) - 21;
+                DrawLine(new Vector2(x - 5, toothY), new Vector2(x + 5, toothY + (index * 2)),
+                    new Color(accent, alpha), 1.5f, true);
+            }
+        }
+        DrawRect(new Rect2(20, -15, 20, 30), new Color(Recess, alpha), true);
+        DrawRect(new Rect2(23, -11, 14, 22), new Color(Titanium.Darkened(0.25f), alpha), false, 1.4f, true);
+        DrawWarningStripes(new Vector2(-18, -27), 36, accent, alpha);
+        if (producing)
+        {
+            DrawParticles(new Vector2(38, 0), new Vector2(8, 15), new Color(0.52f, 0.48f, 0.41f, alpha), 5, 2.2f);
+        }
+    }
+
+    private void DrawSmelter(Color accent, float alpha, bool producing)
+    {
+        var pulse = producing ? 0.58f + (Mathf.Sin(_animationSeconds * 4.2f) * 0.12f) : 0.18f;
+        DrawCircle(Vector2.Zero, 30, new Color(Titanium.Darkened(0.12f), alpha));
+        DrawArc(Vector2.Zero, 30, 0, Mathf.Tau, 40, new Color(Titanium.Lightened(0.18f), alpha), 3, true);
+        DrawCircle(Vector2.Zero, 21, new Color(Recess, alpha));
+        DrawCircle(Vector2.Zero, 14, new Color(accent, pulse * alpha));
+        for (var index = 0; index < 8; index++)
+        {
+            var direction = Vector2.FromAngle(Mathf.Tau * index / 8f);
+            DrawLine(direction * 23, direction * 30, new Color(Titanium, alpha), 3, true);
+        }
+        DrawVents(new Vector2(-33, 0), vertical: true, accent.Darkened(0.45f), alpha);
+        DrawVents(new Vector2(33, 0), vertical: true, accent.Darkened(0.45f), alpha);
+        if (producing)
+        {
+            DrawParticles(new Vector2(0, -30), new Vector2(15, 10), new Color(0.62f, 0.68f, 0.7f, alpha), 4, 1.7f);
+        }
+    }
+
+    private void DrawFoundry(Color accent, float alpha, bool producing)
+    {
+        foreach (var position in new[] { new Vector2(-38, -18), new Vector2(-38, 18) })
+        {
+            DrawCircle(position, 11, new Color(Titanium.Darkened(0.1f), alpha));
+            DrawCircle(position, 7, new Color(Recess, alpha));
+            DrawArc(position, 11, 0, Mathf.Tau, 20, new Color(Titanium.Lightened(0.15f), alpha), 1.8f, true);
+        }
+        DrawCircle(new Vector2(0, 0), 20, new Color(Titanium.Darkened(0.18f), alpha));
+        DrawCircle(new Vector2(0, 0), 12, new Color(accent, (producing ? 0.38f : 0.12f) * alpha));
+        var slide = producing ? Mathf.Sin(_animationSeconds * 3.5f) * 5f : 0;
+        DrawMechanicalArm(new Vector2(-29, -18), new Vector2(-7 + slide, -5), accent, alpha);
+        DrawMechanicalArm(new Vector2(-29, 18), new Vector2(-7 + slide, 5), accent, alpha);
+        DrawLine(new Vector2(20, 0), new Vector2(36, 0), new Color(accent, alpha), 4, true);
+        DrawRect(new Rect2(36, -18, 18, 36), new Color(Recess, alpha), true);
+        for (var y = -12; y <= 12; y += 8)
+        {
+            DrawLine(new Vector2(39, y), new Vector2(51, y), new Color(Titanium, alpha), 1.4f, true);
+        }
+    }
+
+    private void DrawConstructor(Color accent, float alpha, bool producing)
+    {
+        var press = producing ? Mathf.Abs(Mathf.Sin(_animationSeconds * 4.5f)) * 6f : 0;
+        DrawRect(new Rect2(-17, -23, 34, 46), new Color(Recess, alpha), true);
+        DrawRect(new Rect2(-17, -23, 34, 46), new Color(Titanium, alpha), false, 2, true);
+        DrawRect(new Rect2(-11 + press, -7, 22 - (press * 2), 14), new Color(accent, 0.72f * alpha), true);
+        DrawMechanicalArm(new Vector2(-36, -19), new Vector2(-15, -7), accent, alpha);
+        DrawMechanicalArm(new Vector2(36, 19), new Vector2(15, 7), accent, alpha);
+        DrawRect(new Rect2(-43, -10, 10, 20), new Color(Titanium.Darkened(0.2f), alpha), true);
+        DrawRect(new Rect2(33, -10, 10, 20), new Color(Titanium.Darkened(0.2f), alpha), true);
+    }
+
+    private void DrawFabricator(Color accent, float alpha, bool producing)
+    {
+        Vector2[] chamber = [new(-20, -27), new(20, -27), new(29, -18), new(29, 18), new(20, 27), new(-20, 27), new(-29, 18), new(-29, -18)];
+        DrawColoredPolygon(chamber, new Color(Recess, alpha));
+        DrawPolyline(Close(chamber), new Color(accent, 0.9f * alpha), 2, true);
+        DrawCircle(Vector2.Zero, 12, new Color(Titanium.Darkened(0.1f), alpha));
+        DrawCircle(Vector2.Zero, 5, new Color(accent, (producing ? 0.82f : 0.32f) * alpha));
+        for (var index = 0; index < 4; index++)
+        {
+            var angle = (Mathf.Tau * index / 4f) + (producing ? Mathf.Sin(_animationSeconds * 2.5f + index) * 0.18f : 0);
+            var direction = Vector2.FromAngle(angle);
+            DrawMechanicalArm(direction * 25, direction * 10, accent, alpha);
+        }
+        foreach (var y in new[] { -18f, 0f, 18f })
+        {
+            DrawLine(new Vector2(-51, y), new Vector2(-30, y * 0.55f), new Color(Titanium, alpha), 3, true);
+        }
+        DrawRect(new Rect2(35, -18, 17, 36), new Color(accent, 0.16f * alpha), true);
+        var scanY = producing ? Mathf.Sin(_animationSeconds * 3.1f) * 13f : -10f;
+        DrawLine(new Vector2(38, scanY), new Vector2(49, scanY), new Color(accent, 0.9f * alpha), 1.5f, true);
+    }
+
+    private void DrawWaterProcessor(Color accent, float alpha, bool producing)
+    {
+        Vector2[] hopper = [new(-40, -24), new(-20, -17), new(-20, 17), new(-40, 24)];
+        DrawColoredPolygon(hopper, new Color(Titanium.Darkened(0.08f), alpha));
+        DrawPolyline(Close(hopper), new Color(Titanium.Lightened(0.16f), alpha), 1.6f, true);
+        DrawTank(new Vector2(2, 0), new Vector2(16, 24), accent, alpha, producing ? 0.62f : 0.36f);
+        DrawCircle(new Vector2(28, 0), 11, new Color(Recess, alpha));
+        DrawArc(new Vector2(28, 0), 11, 0, Mathf.Tau, 20, new Color(accent, alpha), 2, true);
+        var rotorAngle = producing ? _animationSeconds * 4f : 0;
+        for (var index = 0; index < 4; index++)
+        {
+            var direction = Vector2.FromAngle(rotorAngle + (Mathf.Tau * index / 4f));
+            DrawLine(new Vector2(28, 0), new Vector2(28, 0) + direction * 8, new Color(accent, alpha), 2, true);
+        }
+        DrawLine(new Vector2(18, 0), new Vector2(17, 0), new Color(accent, alpha), 3, true);
+        if (producing)
+        {
+            DrawParticles(new Vector2(4, -13), new Vector2(11, 16), new Color(0.4f, 0.82f, 1f, alpha), 4, 1.6f);
+        }
+    }
+
+    private void DrawElectrolyzer(Color accent, float alpha, bool producing)
+    {
+        DrawTank(new Vector2(-15, 0), new Vector2(18, 25), accent, alpha, producing ? 0.48f : 0.24f);
+        var hydrogen = new Color(0.2f, 0.82f, 1f, alpha);
+        var oxygen = new Color(0.72f, 0.9f, 1f, alpha);
+        DrawTank(new Vector2(25, -15), new Vector2(12, 10), hydrogen, alpha, 0.28f);
+        DrawTank(new Vector2(25, 15), new Vector2(12, 10), oxygen, alpha, 0.22f);
+        DrawLine(new Vector2(3, -7), new Vector2(13, -15), hydrogen, 3, true);
+        DrawLine(new Vector2(3, 7), new Vector2(13, 15), oxygen, 3, true);
+        DrawGauge(new Vector2(-15, -17), accent, alpha);
+        if (producing)
+        {
+            DrawBubbles(new Vector2(-15, 0), 14, 20, accent, alpha);
+            DrawFlowPulse(new Vector2(4, -8), new Vector2(14, -15), hydrogen);
+            DrawFlowPulse(new Vector2(4, 8), new Vector2(14, 15), oxygen);
+        }
+    }
+
+    private void DrawRefinery(Color accent, float alpha, bool producing)
+    {
+        DrawTank(new Vector2(-43, 6), new Vector2(14, 27), accent.Darkened(0.2f), alpha, 0.28f);
+        DrawTank(new Vector2(-5, -4), new Vector2(17, 35), accent, alpha, producing ? 0.46f : 0.24f);
+        DrawTank(new Vector2(38, 10), new Vector2(14, 23), accent.Lightened(0.12f), alpha, 0.22f);
+        DrawLine(new Vector2(-29, 4), new Vector2(-22, 0), new Color(Titanium, alpha), 5, true);
+        DrawLine(new Vector2(12, 2), new Vector2(24, 8), new Color(Titanium, alpha), 5, true);
+        DrawCircle(new Vector2(-25, 1), 3.5f, new Color(accent, alpha));
+        DrawCircle(new Vector2(20, 6), 3.5f, new Color(accent, alpha));
+        DrawGauge(new Vector2(-43, -16), accent, alpha);
+        DrawGauge(new Vector2(38, -9), accent, alpha);
+        DrawVents(new Vector2(-4, 38), vertical: false, Titanium, alpha);
+        if (producing)
+        {
+            DrawParticles(new Vector2(-4, -38), new Vector2(19, 11), new Color(0.55f, 0.68f, 0.68f, alpha), 5, 1.8f);
+            DrawFlowPulse(new Vector2(-27, 2), new Vector2(-21, 0), new Color(accent, alpha));
+            DrawFlowPulse(new Vector2(14, 3), new Vector2(23, 8), new Color(accent, alpha));
+        }
+    }
+
+    private void DrawBasicGenerator(Color accent, float alpha, bool producing)
+    {
+        DrawCircle(Vector2.Zero, 22, new Color(Recess, alpha));
+        DrawArc(Vector2.Zero, 22, 0, Mathf.Tau, 32, new Color(Titanium, alpha), 3, true);
+        var rotation = producing ? _animationSeconds * 1.7f : 0;
+        DrawTurbine(Vector2.Zero, 17, 6, rotation, accent, alpha);
+        DrawRect(new Rect2(-19, 24, 38, 6), new Color(accent, 0.18f * alpha), true);
+        DrawRect(new Rect2(-17, 26, producing ? 27 : 9, 2), new Color(accent, alpha), true);
+    }
+
+    private void DrawFuelGenerator(Color accent, float alpha, bool producing)
+    {
+        DrawTank(new Vector2(-31, 0), new Vector2(11, 25), accent, alpha, 0.25f);
+        DrawLine(new Vector2(-20, 0), new Vector2(-15, 0), new Color(accent, alpha), 4, true);
+        DrawCircle(new Vector2(7, 0), 24, new Color(Recess, alpha));
+        DrawArc(new Vector2(7, 0), 24, 0, Mathf.Tau, 32, new Color(Titanium, alpha), 3, true);
+        DrawTurbine(new Vector2(7, 0), 19, 8, producing ? _animationSeconds * 4.2f : 0, accent, alpha);
+        DrawVents(new Vector2(38, 0), vertical: true, Titanium.Lightened(0.08f), alpha);
+        if (producing)
+        {
+            DrawParticles(new Vector2(43, 0), new Vector2(10, 18), new Color(0.82f, 0.49f, 0.2f, alpha), 4, 1.8f);
+        }
+    }
+
+    private void DrawPowerPole(Color accent, float alpha, bool energized)
+    {
+        // Six independent branch conductors feed a recessed central bus. The
+        // angular spine and service hatch keep the silhouette mechanical rather
+        // than reading as a placeholder circle.
+        DrawRect(new Rect2(-12, -18, 24, 36), new Color(Recess, alpha), true);
+        DrawRect(new Rect2(-12, -18, 24, 36), new Color(Titanium.Lightened(0.12f), alpha), false, 2, true);
+        DrawRect(new Rect2(-5, -15, 10, 30), new Color(accent, (energized ? 0.28f : 0.1f) * alpha), true);
+        DrawLine(new Vector2(-2, -13), new Vector2(-2, 13), new Color(accent, 0.78f * alpha), 1.4f, true);
+        DrawLine(new Vector2(2, -13), new Vector2(2, 13), new Color(accent, 0.42f * alpha), 1.1f, true);
+
+        var portsPerSide = PowerGridConfiguration.PowerPolePortCount / 2;
+        for (var row = 0; row < portsPerSide; row++)
+        {
+            var leftAnchor = _presentation!.GetPowerPortAnchor(row);
+            var rightAnchor = _presentation.GetPowerPortAnchor(
+                (PowerGridConfiguration.PowerPolePortCount - 1) - row);
+            var y = leftAnchor.Y;
+            DrawLine(leftAnchor, new Vector2(-12, y), new Color(Titanium, alpha), 4, true);
+            DrawLine(new Vector2(12, y), rightAnchor, new Color(Titanium, alpha), 4, true);
+            DrawLine(leftAnchor + new Vector2(4, 0), new Vector2(-5, y * 0.72f), new Color(accent, 0.72f * alpha), 1.3f, true);
+            DrawLine(new Vector2(5, y * 0.72f), rightAnchor - new Vector2(4, 0), new Color(accent, 0.72f * alpha), 1.3f, true);
+        }
+
+        DrawRect(new Rect2(-9, -5, 18, 10), new Color(0.16f, 0.19f, 0.2f, alpha), true);
+        DrawRect(new Rect2(-7, -3, 14, 6), new Color(0.025f, 0.04f, 0.046f, alpha), true);
+        for (var index = 0; index < 3; index++)
+        {
+            var lit = energized || index == 0;
+            DrawRect(
+                new Rect2(-5 + (index * 4), -1, 2.5f, 2),
+                lit
+                    ? new Color(accent, (energized ? 0.9f : 0.4f) * alpha)
+                    : new Color(accent.Darkened(0.7f), 0.35f * alpha),
+                true);
+        }
+    }
+
+    private void DrawStorage(Color accent, float alpha)
+    {
+        for (var column = -2; column <= 2; column++)
+        {
+            var x = column * 20f;
+            DrawRect(new Rect2(x - 8, -25, 16, 50), new Color(Recess, alpha), true);
+            DrawRect(new Rect2(x - 8, -25, 16, 50), new Color(Titanium.Darkened(0.08f), alpha), false, 1.6f, true);
+            DrawLine(new Vector2(x, -19), new Vector2(x, 19), new Color(Titanium, 0.7f * alpha), 1, true);
+            DrawCircle(new Vector2(x + 4, 0), 1.7f, new Color(accent, 0.8f * alpha));
+        }
+        for (var index = 0; index < 8; index++)
+        {
+            DrawRect(new Rect2(-21 + (index * 6), 28, 4, 3),
+                index < 5 ? new Color(accent, alpha) : new Color(Recess, alpha), true);
+        }
+    }
+
+    private void DrawResearch(Color accent, float alpha, bool producing)
+    {
+        DrawCircle(Vector2.Zero, 24, new Color(Recess, alpha));
+        DrawCircle(Vector2.Zero, 12, new Color(accent, (producing ? 0.34f : 0.16f) * alpha));
+        DrawArc(Vector2.Zero, 30, 0, Mathf.Tau, 40, new Color(accent, 0.7f * alpha), 2, true);
+        var rotation = producing ? _animationSeconds * 0.9f : 0;
+        for (var index = 0; index < 3; index++)
+        {
+            var direction = Vector2.FromAngle(rotation - (Mathf.Pi * 0.5f) + (Mathf.Tau * index / 3f));
+            var module = direction * 30;
+            DrawLine(direction * 23, module, new Color(Titanium, alpha), 3, true);
+            DrawCircle(module, 6, new Color(Titanium.Darkened(0.05f), alpha));
+            DrawCircle(module, 2.2f, new Color(accent, alpha));
+        }
+        foreach (var panel in new[] { new Rect2(-48, -24, 16, 13), new Rect2(32, -24, 16, 13), new Rect2(32, 12, 16, 13) })
+        {
+            DrawRect(panel, new Color(Recess, alpha), true);
+            DrawRect(panel.Grow(-3), new Color(accent, 0.25f * alpha), true);
+        }
+        if (producing)
+        {
+            var scanAngle = _animationSeconds * 2.1f;
+            DrawLine(Vector2.Zero, Vector2.FromAngle(scanAngle) * 20, new Color(accent, 0.76f * alpha), 1.4f, true);
+        }
+    }
+
+    private void DrawTank(Vector2 center, Vector2 radius, Color accent, float alpha, float fill)
+    {
+        var tank = new Rect2(center - radius, radius * 2);
+        DrawRect(tank, new Color(Recess, alpha), true);
+        DrawRect(tank, new Color(Titanium.Darkened(0.08f), alpha), false, 2, true);
+        DrawRect(new Rect2(tank.Position + new Vector2(4, tank.Size.Y * (1 - fill)),
+                new Vector2(tank.Size.X - 8, (tank.Size.Y * fill) - 4)),
+            new Color(accent, 0.3f * alpha), true);
+        DrawLine(new Vector2(tank.Position.X, center.Y), new Vector2(tank.End.X, center.Y),
+            new Color(accent, 0.48f * alpha), 1, true);
+    }
+
+    private void DrawTurbine(Vector2 center, float radius, int blades, float rotation, Color accent, float alpha)
+    {
+        DrawCircle(center, radius * 0.34f, new Color(Titanium, alpha));
+        for (var index = 0; index < blades; index++)
+        {
+            var direction = Vector2.FromAngle(rotation + (Mathf.Tau * index / blades));
+            var side = direction.Rotated(0.42f);
+            Vector2[] blade =
+            [
+                center + direction * radius * 0.3f,
+                center + direction * radius,
+                center + side * radius * 0.65f,
+            ];
+            DrawColoredPolygon(blade, new Color(accent, 0.72f * alpha));
+        }
+        DrawCircle(center, radius * 0.2f, new Color(accent.Lightened(0.18f), alpha));
+    }
+
+    private void DrawMechanicalArm(Vector2 pivot, Vector2 target, Color accent, float alpha)
+    {
+        var elbow = pivot.Lerp(target, 0.55f) + new Vector2(0, (target.X - pivot.X) * 0.16f);
+        DrawLine(pivot, elbow, new Color(Titanium, alpha), 4, true);
+        DrawLine(elbow, target, new Color(Titanium, alpha), 4, true);
+        DrawCircle(pivot, 4.5f, new Color(DarkMetal, alpha));
+        DrawCircle(pivot, 2.2f, new Color(accent, alpha));
+        DrawCircle(elbow, 3.2f, new Color(accent.Darkened(0.16f), alpha));
+    }
+
+    private void DrawGauge(Vector2 center, Color accent, float alpha)
+    {
+        DrawCircle(center, 6, new Color(Recess, alpha));
+        DrawArc(center, 6, Mathf.Pi, Mathf.Tau, 12, new Color(accent, alpha), 1.5f, true);
+        DrawLine(center, center + new Vector2(3.5f, -2.5f), new Color(accent, alpha), 1.3f, true);
+    }
+
+    private void DrawVents(Vector2 center, bool vertical, Color color, float alpha)
+    {
+        for (var index = -2; index <= 2; index++)
+        {
+            var offset = index * 5f;
+            var from = vertical ? center + new Vector2(-3, offset) : center + new Vector2(offset, -3);
+            var to = vertical ? center + new Vector2(3, offset) : center + new Vector2(offset, 3);
+            DrawLine(from, to, new Color(color, alpha), 1.4f, true);
+        }
+    }
+
+    private void DrawWarningStripes(Vector2 origin, float width, Color accent, float alpha)
+    {
+        var warningColor = accent.Lerp(Warning, 0.78f);
+        for (var x = 0f; x < width; x += 8)
+        {
+            DrawLine(origin + new Vector2(x, 0), origin + new Vector2(x + 5, 5),
+                new Color(warningColor, alpha), 2, true);
+        }
+    }
+
+    private void DrawParticles(Vector2 origin, Vector2 spread, Color color, int count, float radius)
+    {
+        for (var index = 0; index < count; index++)
+        {
+            var phase = Mathf.PosMod((_animationSeconds * (0.7f + (index * 0.08f))) + (index * 0.23f), 1f);
+            var offset = new Vector2(
+                Mathf.Sin((phase * 8f) + index) * spread.X * 0.55f,
+                (-phase * spread.Y) + (Mathf.Cos(index * 2.2f) * spread.Y * 0.16f));
+            DrawCircle(origin + offset, Mathf.Lerp(radius, 0.4f, phase), new Color(color, color.A * (1 - phase)));
+        }
+    }
+
+    private void DrawBubbles(Vector2 center, float width, float height, Color color, float alpha)
+    {
+        for (var index = 0; index < 5; index++)
+        {
+            var phase = Mathf.PosMod((_animationSeconds * (0.45f + (index * 0.05f))) + (index * 0.19f), 1f);
+            var position = center + new Vector2(
+                Mathf.Sin((index * 2.3f) + phase) * width * 0.55f,
+                (height * 0.5f) - (phase * height));
+            DrawArc(position, 1.4f + (index % 2), 0, Mathf.Tau, 10,
+                new Color(color, (1 - phase) * 0.72f * alpha), 1, true);
+        }
+    }
+
+    private void DrawFlowPulse(Vector2 from, Vector2 to, Color color)
+    {
+        var phase = Mathf.PosMod(_animationSeconds * 1.4f, 1f);
+        DrawCircle(from.Lerp(to, phase), 2.2f, new Color(color, 0.9f));
+    }
+
+    private void DrawConstructionHologram(Vector2 half, IReadOnlyList<Vector2> silhouette)
     {
         var pulse = 0.52f + (Mathf.Sin((float)Time.GetTicksMsec() * 0.008f) * 0.18f);
         var hologram = new Color(0.12f, 0.86f, 1.0f, pulse);
-        DrawPolyline([.. chassis, chassis[0]], hologram, 1.2f, true);
+        DrawPolyline(Close(silhouette), hologram, 1.2f, true);
         for (var column = -2; column <= 2; column++)
         {
             var x = half.X * column / 2.5f;
@@ -266,74 +820,27 @@ public partial class MachineView : StaticBody2D
         DrawLine(new Vector2(-half.X, scanY), new Vector2(half.X, scanY), hologram, 2.3f, true);
     }
 
-    private void DrawMachineGlyph(MachineGlyph glyph, Color accent, Color secondary)
-    {
-        switch (glyph)
-        {
-            case MachineGlyph.Crusher:
-                DrawColoredPolygon([new(-22, -12), new(-3, 0), new(-22, 12)], accent);
-                DrawColoredPolygon([new(22, -12), new(3, 0), new(22, 12)], accent);
-                break;
-            case MachineGlyph.Smelter:
-                DrawColoredPolygon([new(0, -20), new(14, 8), new(5, 18), new(0, 9), new(-7, 18), new(-14, 8)], secondary);
-                DrawCircle(new Vector2(0, 7), 7, accent);
-                break;
-            case MachineGlyph.Foundry:
-                DrawCircle(new Vector2(-13, -7), 7, secondary);
-                DrawCircle(new Vector2(13, -7), 7, secondary);
-                DrawLine(new Vector2(-13, 0), new Vector2(0, 15), accent, 3, true);
-                DrawLine(new Vector2(13, 0), new Vector2(0, 15), accent, 3, true);
-                break;
-            case MachineGlyph.Constructor:
-            case MachineGlyph.Fabricator:
-                DrawCircle(Vector2.Zero, 17, secondary);
-                DrawCircle(Vector2.Zero, 8, _presentation!.BodyColor.Darkened(0.35f));
-                for (var index = 0; index < 8; index++)
-                {
-                    var direction = Vector2.FromAngle(Mathf.Tau * index / 8f);
-                    DrawLine(direction * 15, direction * 23, accent, 3, true);
-                }
-                break;
-            case MachineGlyph.BasicGenerator:
-            case MachineGlyph.FuelGenerator:
-                DrawColoredPolygon([new(4, -22), new(-13, 2), new(-3, 2), new(-8, 22), new(15, -7), new(4, -7)], accent);
-                break;
-            case MachineGlyph.Storage:
-                for (var row = -1; row <= 1; row++)
-                {
-                    DrawRect(new Rect2(-24, (row * 12) - 4, 48, 8), row == 0 ? accent : secondary, row == 0);
-                }
-                break;
-            case MachineGlyph.Research:
-                DrawCircle(Vector2.Zero, 5, accent);
-                DrawArc(Vector2.Zero, 20, 0, Mathf.Tau, 24, secondary, 2, true);
-                DrawArc(Vector2.Zero, 20, -0.8f, 0.8f, 12, accent, 3, true);
-                break;
-            case MachineGlyph.WaterProcessor:
-            case MachineGlyph.Electrolyzer:
-            case MachineGlyph.Refinery:
-                DrawCircle(new Vector2(-11, 0), 11, secondary);
-                DrawCircle(new Vector2(11, 0), 11, accent);
-                DrawLine(new Vector2(0, -19), new Vector2(0, 19), secondary, 2, true);
-                break;
-        }
-    }
-
-    private static Vector2[] CreateBeveledRectangle(Vector2 size, float bevel)
+    private static Vector2[] CreateMachineSilhouette(MachineGlyph glyph, Vector2 size)
     {
         var half = size * 0.5f;
-        return
-        [
-            new(-half.X + bevel, -half.Y),
-            new(half.X - bevel, -half.Y),
-            new(half.X, -half.Y + bevel),
-            new(half.X, half.Y - bevel),
-            new(half.X - bevel, half.Y),
-            new(-half.X + bevel, half.Y),
-            new(-half.X, half.Y - bevel),
-            new(-half.X, -half.Y + bevel),
-        ];
+        return glyph switch
+        {
+            MachineGlyph.Crusher => [new(-half.X, -half.Y + 12), new(-half.X + 12, -half.Y), new(half.X - 18, -half.Y), new(half.X, -half.Y + 18), new(half.X, half.Y - 18), new(half.X - 18, half.Y), new(-half.X + 12, half.Y), new(-half.X, half.Y - 12)],
+            MachineGlyph.Smelter => [new(-half.X + 18, -half.Y), new(half.X - 18, -half.Y), new(half.X, -half.Y + 18), new(half.X, half.Y - 18), new(half.X - 18, half.Y), new(-half.X + 18, half.Y), new(-half.X, half.Y - 18), new(-half.X, -half.Y + 18)],
+            MachineGlyph.Foundry => [new(-half.X, -half.Y + 12), new(-half.X + 25, -half.Y + 12), new(-half.X + 25, -half.Y), new(half.X - 14, -half.Y), new(half.X, -half.Y + 14), new(half.X, half.Y - 14), new(half.X - 14, half.Y), new(-half.X + 25, half.Y), new(-half.X + 25, half.Y - 12), new(-half.X, half.Y - 12)],
+            MachineGlyph.Constructor => [new(-half.X + 12, -half.Y), new(half.X - 21, -half.Y), new(half.X - 21, -half.Y + 8), new(half.X, -half.Y + 8), new(half.X, half.Y - 8), new(half.X - 21, half.Y - 8), new(half.X - 21, half.Y), new(-half.X + 12, half.Y), new(-half.X, half.Y - 12), new(-half.X, -half.Y + 12)],
+            MachineGlyph.Fabricator or MachineGlyph.Research => [new(-half.X + 20, -half.Y), new(half.X - 20, -half.Y), new(half.X, -half.Y + 20), new(half.X, half.Y - 20), new(half.X - 20, half.Y), new(-half.X + 20, half.Y), new(-half.X, half.Y - 20), new(-half.X, -half.Y + 20)],
+            MachineGlyph.WaterProcessor or MachineGlyph.Electrolyzer => [new(-half.X + 14, -half.Y), new(half.X - 14, -half.Y), new(half.X, -half.Y + 14), new(half.X, half.Y - 14), new(half.X - 14, half.Y), new(-half.X + 14, half.Y), new(-half.X, half.Y - 14), new(-half.X, -half.Y + 14)],
+            MachineGlyph.Refinery => [new(-half.X, -half.Y + 14), new(-half.X + 20, -half.Y + 14), new(-half.X + 20, -half.Y), new(half.X - 20, -half.Y), new(half.X - 20, -half.Y + 14), new(half.X, -half.Y + 14), new(half.X, half.Y - 14), new(half.X - 20, half.Y - 14), new(half.X - 20, half.Y), new(-half.X + 20, half.Y), new(-half.X + 20, half.Y - 14), new(-half.X, half.Y - 14)],
+            MachineGlyph.BasicGenerator => [new(-half.X + 12, -half.Y), new(half.X - 12, -half.Y), new(half.X, -half.Y + 12), new(half.X, half.Y - 12), new(half.X - 12, half.Y), new(-half.X + 12, half.Y), new(-half.X, half.Y - 12), new(-half.X, -half.Y + 12)],
+            MachineGlyph.PowerPole => [new(-half.X + 7, -half.Y), new(half.X - 7, -half.Y), new(half.X, -half.Y + 7), new(half.X, half.Y - 7), new(half.X - 7, half.Y), new(-half.X + 7, half.Y), new(-half.X, half.Y - 7), new(-half.X, -half.Y + 7)],
+            MachineGlyph.FuelGenerator => [new(-half.X, -half.Y + 10), new(-half.X + 19, -half.Y + 10), new(-half.X + 19, -half.Y), new(half.X - 13, -half.Y), new(half.X, -half.Y + 13), new(half.X, half.Y - 13), new(half.X - 13, half.Y), new(-half.X + 19, half.Y), new(-half.X + 19, half.Y - 10), new(-half.X, half.Y - 10)],
+            MachineGlyph.Storage => [new(-half.X + 9, -half.Y), new(half.X - 9, -half.Y), new(half.X, -half.Y + 9), new(half.X, half.Y - 9), new(half.X - 9, half.Y), new(-half.X + 9, half.Y), new(-half.X, half.Y - 9), new(-half.X, -half.Y + 9)],
+            _ => [new(-half.X, -half.Y), new(half.X, -half.Y), new(half.X, half.Y), new(-half.X, half.Y)],
+        };
     }
+
+    private static Vector2[] Close(IReadOnlyList<Vector2> polygon) => [.. polygon, polygon[0]];
 
     private static string GetStatusText(MachineOperationStatus status) => status switch
     {

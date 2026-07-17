@@ -2,6 +2,7 @@ using Godot;
 using SpaceFactory.Application.Factory;
 using SpaceFactory.Core.Inventory;
 using SpaceFactory.Core.Items;
+using SpaceFactory.Core.Logistics;
 using SpaceFactory.Core.Common;
 using SpaceFactory.Core.Player;
 using SpaceFactory.Core.Production;
@@ -36,6 +37,7 @@ public partial class GameRoot : Node
     private const int UnpilotedShipStreamingRadius = 1;
     private const double StreamingCheckIntervalSeconds = 0.2;
     private const double DockingCheckIntervalSeconds = 0.1;
+    private const double PowerMenuRefreshIntervalSeconds = 0.25;
     private static readonly WorldGenerationSettings GenerationSettings = new(
         SectorSize,
         0,
@@ -87,6 +89,8 @@ public partial class GameRoot : Node
     private SettingsMenuController _settingsMenu = null!;
     private BuildMenuController _buildMenu = null!;
     private MachinePanelController _machinePanel = null!;
+    private CanvasLayer _powerMenuLayer = null!;
+    private PowerMenuControl _powerMenu = null!;
     private FactoryRuntimeController _factory = null!;
     private IReadOnlyList<ResourceDefinition> _resourceCatalog = [];
     private JsonResourceStateStore _resourceStateStore = null!;
@@ -95,6 +99,7 @@ public partial class GameRoot : Node
     private SectorCoordinate _streamedShipSector;
     private double _streamingCheckElapsed;
     private double _dockingCheckElapsed;
+    private double _powerMenuRefreshElapsed;
     private PlayerControlMode _controlMode = PlayerControlMode.Ship;
     private PrimaryUiMode _primaryUiMode = PrimaryUiMode.None;
     private ShipInteractionAction _availableShipInteraction;
@@ -104,7 +109,10 @@ public partial class GameRoot : Node
     private AsteroidView? _availableDockingComet;
     private ShipDockingAction _displayedDockingAction;
     private MachineState? _availableMachineInteraction;
+    private PowerInteractionTarget? _availablePowerInteraction;
+    private PowerInteractionTarget? _displayedPowerInteraction;
     private MachineState? _machinePanelTarget;
+    private PowerInteractionTarget? _powerMenuTarget;
     private MachineInstanceId? _displayedMachineInteractionId;
 
     public ExplorationMapService ExplorationMap => _explorationMap;
@@ -121,6 +129,19 @@ public partial class GameRoot : Node
         _buildMenu = GetNode<BuildMenuController>("BuildMenu");
         _machinePanel = GetNode<MachinePanelController>("MachinePanel");
         _factory = GetNode<FactoryRuntimeController>("World/FactoryRuntime");
+        _powerMenuLayer = new CanvasLayer
+        {
+            Name = "PowerMenuLayer",
+            Layer = 80,
+        };
+        AddChild(_powerMenuLayer);
+        _powerMenu = new PowerMenuControl { Name = "PowerMenu" };
+        _powerMenu.Closed += HandlePowerMenuClosed;
+        _powerMenu.NetworkEnabledChangeRequested += HandlePowerNetworkEnabledChanged;
+        _powerMenu.PortEnabledChangeRequested += HandlePowerPortEnabledChanged;
+        _powerMenu.SourceEnabledChangeRequested += HandlePowerSourceEnabledChanged;
+        _powerMenu.DisconnectPortRequested += HandlePowerPortDisconnectRequested;
+        _powerMenuLayer.AddChild(_powerMenu);
         _inventoryMenu.Closed += HandleInventoryClosed;
         _inventoryMenu.RefuelRequested += HandleRefuelRequested;
         _worldMap.MapVisibilityChanged += HandleMapVisibilityChanged;
@@ -159,6 +180,7 @@ public partial class GameRoot : Node
             _ship.RestoreFuel,
             message => _resourceHud.ShowMessage(message));
         _factory.AttachShipInventory(_shipInventory);
+        _factory.AttachShipPower(_ship, SectorSize);
         _ship.FuelChanged += HandleShipFuelChanged;
         RefreshBuildMenuCatalog();
         _buildMenu.SetBuildActionLabel(InputBindingFormatter.FormatAction("build_menu"));
@@ -169,7 +191,8 @@ public partial class GameRoot : Node
             _resourceHud,
             IsGameplayInputBlocked);
         SetControlMode(PlayerControlMode.Ship, updateUi: false);
-        LoadAround(new SectorCoordinate(0, 0), new SectorCoordinate(0, 0));
+        var initialSector = ToSectorCoordinate(_ship.GlobalPosition);
+        LoadAround(initialSector, GetStreamingCenter(initialSector));
         UpdateUi();
 #if DEBUG
         if (OS.HasFeature("headless") ||
@@ -188,6 +211,15 @@ public partial class GameRoot : Node
             _factory.FactoryStateChanged -= HandleFactoryStateChanged;
             _factory.BuildCatalogChanged -= HandleBuildCatalogChanged;
             _factory.MachineInteractionRequested -= OpenMachinePanel;
+        }
+
+        if (GodotObject.IsInstanceValid(_powerMenu))
+        {
+            _powerMenu.Closed -= HandlePowerMenuClosed;
+            _powerMenu.NetworkEnabledChangeRequested -= HandlePowerNetworkEnabledChanged;
+            _powerMenu.PortEnabledChangeRequested -= HandlePowerPortEnabledChanged;
+            _powerMenu.SourceEnabledChangeRequested -= HandlePowerSourceEnabledChanged;
+            _powerMenu.DisconnectPortRequested -= HandlePowerPortDisconnectRequested;
         }
 
         if (GodotObject.IsInstanceValid(_worldMap))
@@ -217,6 +249,17 @@ public partial class GameRoot : Node
         {
             _inventoryMenu.SetFuelTankState(_ship.FuelTank.CurrentFuel, _ship.FuelTank.Capacity);
         }
+
+        if (_primaryUiMode == PrimaryUiMode.PowerMenu)
+        {
+            _powerMenuRefreshElapsed += delta;
+            if (_powerMenuRefreshElapsed >= PowerMenuRefreshIntervalSeconds)
+            {
+                _powerMenuRefreshElapsed = 0;
+                RefreshPowerMenu();
+            }
+        }
+
         if (_primaryUiMode == PrimaryUiMode.PauseMenu)
         {
             return;
@@ -307,7 +350,7 @@ public partial class GameRoot : Node
                 switch (placementMouse.ButtonIndex)
                 {
                     case MouseButton.Left:
-                        _factory.TryPlaceSelectedMachine();
+                        _factory.TryPlaceSelectedMachineAtViewportPosition(placementMouse.Position);
                         GetViewport().SetInputAsHandled();
                         return;
                     case MouseButton.Right:
@@ -379,7 +422,8 @@ public partial class GameRoot : Node
                 _primaryUiMode is PrimaryUiMode.Inventory or
                     PrimaryUiMode.Map or
                     PrimaryUiMode.BuildMenu or
-                    PrimaryUiMode.MachinePanel
+                    PrimaryUiMode.MachinePanel or
+                    PrimaryUiMode.PowerMenu
                     ? PrimaryUiMode.None
                     : PrimaryUiMode.PauseMenu);
             GetViewport().SetInputAsHandled();
@@ -404,7 +448,8 @@ public partial class GameRoot : Node
         {
             RefreshShipInteractionState();
             if (_availableShipInteraction != ShipInteractionAction.None ||
-                _availableMachineInteraction is not null)
+                _availableMachineInteraction is not null ||
+                _availablePowerInteraction is not null)
             {
                 if (_shipInteractionPressGate.TryPress())
                 {
@@ -669,6 +714,12 @@ public partial class GameRoot : Node
 
     private void ExecuteShipInteraction()
     {
+        if (_availablePowerInteraction is { } powerTarget)
+        {
+            OpenPowerMenu(powerTarget);
+            return;
+        }
+
         if (_availableMachineInteraction is { } machine)
         {
             OpenMachinePanel(machine);
@@ -822,11 +873,20 @@ public partial class GameRoot : Node
             return;
         }
 
+        if (_availableDockingDecision.Action == ShipDockingAction.Detach &&
+            _factory.HasShipPowerConnections)
+        {
+            _resourceHud.ShowMessage("Stromkabel zuerst trennen");
+            return;
+        }
+
         var decision = _ship.ExecuteDocking(_availableDockingContext, _availableDockingComet);
         if (!decision.IsAllowed)
         {
             return;
         }
+
+        _factory.SynchronizeShipPowerDocking();
 
         if (decision.Action == ShipDockingAction.Attach &&
             _ship.DockingState.AttachedCometId is { } cometId)
@@ -852,7 +912,7 @@ public partial class GameRoot : Node
 
         if ((mode == PlayerControlMode.OnFoot && _primaryUiMode == PrimaryUiMode.Map) ||
             (mode == PlayerControlMode.Ship &&
-             _primaryUiMode is PrimaryUiMode.BuildMenu or PrimaryUiMode.MachinePanel))
+             _primaryUiMode is PrimaryUiMode.BuildMenu or PrimaryUiMode.MachinePanel or PrimaryUiMode.PowerMenu))
         {
             SetPrimaryUiMode(PrimaryUiMode.None);
         }
@@ -899,19 +959,37 @@ public partial class GameRoot : Node
             new WorldPosition(_ship.CockpitEntryPosition.X, _ship.CockpitEntryPosition.Y),
             _ship.CockpitEntryRadius);
         MachineState? availableMachine = null;
+        PowerInteractionTarget? availablePower = null;
         if (_controlMode == PlayerControlMode.OnFoot && !_onFootPlayer.IsMining && !inputBlocked)
         {
-            var candidate = _factory.FindNearestInteractiveMachine(_onFootPlayer.GlobalPosition);
-            if (candidate is not null)
+            var bestDistance = availableAction == ShipInteractionAction.EnterShip
+                ? _onFootPlayer.GlobalPosition.DistanceSquaredTo(_ship.CockpitEntryPosition)
+                : float.PositiveInfinity;
+            var machineCandidate = _factory.FindNearestInteractiveMachine(_onFootPlayer.GlobalPosition);
+            if (machineCandidate is not null)
             {
                 var machineDistance = _factory.GetMachineDistanceSquared(
-                    candidate,
+                    machineCandidate,
                     _onFootPlayer.GlobalPosition);
-                var shipDistance = _onFootPlayer.GlobalPosition.DistanceSquaredTo(_ship.CockpitEntryPosition);
-                if (availableAction != ShipInteractionAction.EnterShip || machineDistance < shipDistance)
+                if (machineDistance < bestDistance)
+                {
+                    bestDistance = machineDistance;
+                    availableAction = ShipInteractionAction.None;
+                    availableMachine = machineCandidate;
+                }
+            }
+
+            var powerCandidate = _factory.FindNearestPowerInteraction(_onFootPlayer.GlobalPosition);
+            if (powerCandidate is { } resolvedPowerCandidate)
+            {
+                var powerDistance = _factory.GetPowerInteractionDistanceSquared(
+                    resolvedPowerCandidate,
+                    _onFootPlayer.GlobalPosition);
+                if (powerDistance < bestDistance)
                 {
                     availableAction = ShipInteractionAction.None;
-                    availableMachine = candidate;
+                    availableMachine = null;
+                    availablePower = resolvedPowerCandidate;
                 }
             }
         }
@@ -923,14 +1001,17 @@ public partial class GameRoot : Node
         if (!forcePromptUpdate &&
             availableAction == _availableShipInteraction &&
             dockingAction == _displayedDockingAction &&
-            machineId == _displayedMachineInteractionId)
+            machineId == _displayedMachineInteractionId &&
+            Equals(availablePower, _displayedPowerInteraction))
         {
             return;
         }
 
         _availableShipInteraction = availableAction;
         _availableMachineInteraction = availableMachine;
+        _availablePowerInteraction = availablePower;
         _displayedMachineInteractionId = machineId;
+        _displayedPowerInteraction = availablePower;
         _displayedDockingAction = dockingAction;
         var prompts = new List<string>();
         var interactionBinding = InputBindingFormatter.FormatAction("ship_interaction");
@@ -943,6 +1024,11 @@ public partial class GameRoot : Node
         if (interactionPrompt is not null)
         {
             prompts.Add(interactionPrompt);
+        }
+
+        else if (availablePower is not null)
+        {
+            prompts.Add($"{interactionBinding} – Stromnetz öffnen");
         }
 
         else if (availableMachine is not null)
@@ -981,6 +1067,12 @@ public partial class GameRoot : Node
         }
 
         if (mode == PrimaryUiMode.MachinePanel && _machinePanelTarget is null)
+        {
+            return;
+        }
+
+        if (mode == PrimaryUiMode.PowerMenu &&
+            (_controlMode != PlayerControlMode.OnFoot || _powerMenuTarget is null))
         {
             return;
         }
@@ -1054,6 +1146,21 @@ public partial class GameRoot : Node
             _machinePanelTarget = null;
         }
 
+        if (previousMode == PrimaryUiMode.PowerMenu)
+        {
+            _powerMenu.Close();
+            _factory.ClosePowerTarget();
+            _powerMenuTarget = null;
+            _powerMenuRefreshElapsed = 0;
+        }
+        else if (mode != PrimaryUiMode.PowerMenu && _powerMenu.IsOpen)
+        {
+            _powerMenu.Close();
+            _factory.ClosePowerTarget();
+            _powerMenuTarget = null;
+            _powerMenuRefreshElapsed = 0;
+        }
+
         switch (mode)
         {
             case PrimaryUiMode.None:
@@ -1087,6 +1194,21 @@ public partial class GameRoot : Node
                 GetTree().Paused = false;
                 _onFootPlayer.StopMovementImmediately();
                 _machinePanel.Open(_factory.CreateMachinePanelViewModel(_machinePanelTarget!));
+                break;
+            case PrimaryUiMode.PowerMenu:
+                GetTree().Paused = false;
+                _onFootPlayer.StopMovementImmediately();
+                var powerModel = _factory.RefreshOpenPowerViewModel();
+                if (powerModel is null)
+                {
+                    _primaryUiMode = PrimaryUiMode.None;
+                    _factory.ClosePowerTarget();
+                    _powerMenuTarget = null;
+                    break;
+                }
+
+                _powerMenuRefreshElapsed = 0;
+                _powerMenu.Open(powerModel);
                 break;
             case PrimaryUiMode.PauseMenu:
                 GetTree().Paused = true;
@@ -1139,6 +1261,81 @@ public partial class GameRoot : Node
 
         _machinePanelTarget = machine;
         SetPrimaryUiMode(PrimaryUiMode.MachinePanel);
+    }
+
+    private void OpenPowerMenu(PowerInteractionTarget target)
+    {
+        if (_controlMode != PlayerControlMode.OnFoot || _primaryUiMode != PrimaryUiMode.None)
+        {
+            return;
+        }
+
+        _powerMenuTarget = target;
+        _factory.OpenPowerTarget(target);
+        if (_factory.RefreshOpenPowerViewModel() is null)
+        {
+            _factory.ClosePowerTarget();
+            _powerMenuTarget = null;
+            return;
+        }
+
+        SetPrimaryUiMode(PrimaryUiMode.PowerMenu);
+    }
+
+    private void HandlePowerMenuClosed()
+    {
+        if (_primaryUiMode == PrimaryUiMode.PowerMenu)
+        {
+            _primaryUiMode = PrimaryUiMode.None;
+        }
+
+        _factory.ClosePowerTarget();
+        _powerMenuTarget = null;
+        _powerMenuRefreshElapsed = 0;
+        RefreshDockingAvailability(force: true);
+        RefreshShipInteractionState(forcePromptUpdate: true);
+    }
+
+    private void HandlePowerNetworkEnabledChanged(bool enabled)
+    {
+        _factory.SetOpenPowerNetworkEnabled(enabled);
+        RefreshPowerMenu();
+    }
+
+    private void HandlePowerPortEnabledChanged(string portId, bool enabled)
+    {
+        _factory.SetOpenPowerPortEnabled(portId, enabled);
+        RefreshPowerMenu();
+    }
+
+    private void HandlePowerSourceEnabledChanged(string sourceId, bool enabled)
+    {
+        _factory.SetOpenPowerSourceEnabled(sourceId, enabled);
+        RefreshPowerMenu();
+    }
+
+    private void HandlePowerPortDisconnectRequested(string portId)
+    {
+        _factory.DisconnectOpenPowerPort(portId);
+        _inventoryMenu.Refresh();
+        RefreshPowerMenu();
+    }
+
+    private void RefreshPowerMenu()
+    {
+        if (_primaryUiMode != PrimaryUiMode.PowerMenu || !_powerMenu.IsOpen)
+        {
+            return;
+        }
+
+        var model = _factory.RefreshOpenPowerViewModel();
+        if (model is null)
+        {
+            SetPrimaryUiMode(PrimaryUiMode.None);
+            return;
+        }
+
+        _powerMenu.UpdateView(model);
     }
 
     private void HandleMachinePanelClosed()
@@ -1293,15 +1490,60 @@ public partial class GameRoot : Node
 #if DEBUG
     private async void RunHeadlessSmokeTest()
     {
+        var originalControlMode = _controlMode;
+        var originalShipPosition = _ship.GlobalPosition;
+        var originalShipRotation = _ship.GlobalRotation;
+        var originalShipVelocity = _ship.Velocity;
+        var originalAttachedCometId = _ship.DockingState.AttachedCometId;
+        var originalRelativeAttachment = _ship.DockingState.RelativeAttachmentPosition;
+        var originalAttachmentRotation = _ship.DockingState.AttachmentRotationRadians;
+        var originalLandingLegProgress = _ship.DockingState.LandingLegProgress;
+        var originalAttachedComet = originalAttachedCometId is null
+            ? null
+            : _loadedSectors.Values
+                .SelectMany(sector => sector.Comets)
+                .FirstOrDefault(comet =>
+                    string.Equals(comet.CometId, originalAttachedCometId, StringComparison.Ordinal));
+        _factory.DebugSetPersistenceSuppressed(true);
+        if (_ship.IsAttached)
+        {
+            RequireSmokeCondition(
+                originalAttachedComet is not null && !_factory.HasShipPowerConnections,
+                "Headless runtime isolation requires the persisted attached comet and no live ship cables.");
+            _ship.RestoreFreePose(originalShipPosition, originalShipRotation);
+            _factory.SynchronizeShipPowerDocking();
+        }
+
+        var isolatedSmokePosition = new Vector2(SectorSize * 0.5f, SectorSize * 0.5f);
+        _ship.RestoreFreePose(isolatedSmokePosition, 0);
+        var isolatedSmokeSector = ToSectorCoordinate(isolatedSmokePosition);
+        LoadAround(isolatedSmokeSector, isolatedSmokeSector);
+
+        try
+        {
         _inventoryMenu.RunConstructionSmokeTest();
         _buildMenu.RunConstructionSmokeTest();
         _machinePanel.RunConstructionSmokeTest();
-        var persistedJson = FactoryStateJsonCodec.Serialize(FactoryStateData.CreateDefault());
+        var defaultFactoryState = FactoryStateData.CreateDefault();
+        RequireSmokeCondition(
+            defaultFactoryState.ShipInventory.Any(slot =>
+                slot.ItemId == ProductionItemIds.PowerCable.Value &&
+                slot.Amount == LogisticsConfiguration.StartingPowerCableCount) &&
+            defaultFactoryState.ShipInventory.Any(slot =>
+                slot.ItemId == ProductionItemIds.ConveyorBelt.Value &&
+                slot.Amount == LogisticsConfiguration.StartingConveyorBeltCount) &&
+            defaultFactoryState.ShipInventory.Any(slot =>
+                slot.ItemId == ProductionItemIds.TransportPipe.Value &&
+                slot.Amount == LogisticsConfiguration.StartingTransportPipeCount),
+            "A new ship must contain five cables, five conveyor belts and five transport pipes.");
+        var persistedJson = FactoryStateJsonCodec.Serialize(defaultFactoryState);
         RequireSmokeCondition(
             FactoryStateJsonCodec.TryDeserialize(persistedJson, out var restoredFactoryState, out _) &&
             restoredFactoryState.Version == FactoryStateData.CurrentVersion,
             "The factory persistence codec must round-trip a valid state.");
         GD.Print("FACTORY_PERSISTENCE_ROUNDTRIP_OK: versioned machine/research/fuel snapshot");
+        GD.Print("STARTER_CONNECTION_KIT_OK: 5 power cables, 5 conveyor belts, 5 transport pipes");
+        _factory.RunPowerCablePresentationSmokeTest();
 
         SetControlMode(PlayerControlMode.Ship);
         _Input(new InputEventAction { Action = "build_menu", Pressed = true });
@@ -1370,14 +1612,51 @@ public partial class GameRoot : Node
         await RunDockingCandidateInputSmokeTest();
         await RunDockingAndDriftSmokeTest();
         RunSettingsSmokeTest();
+        }
+        finally
+        {
+            Input.ActionRelease("ship_boost");
+            Input.ActionRelease("move_up");
+            SetPrimaryUiMode(PrimaryUiMode.None);
+            _ship.RestoreFreePose(originalShipPosition, originalShipRotation);
+            _factory.SynchronizeShipPowerDocking();
+            var originalSector = ToSectorCoordinate(originalShipPosition);
+            LoadAround(originalSector, originalSector);
+            var restoredAttachedComet = originalAttachedCometId is null
+                ? null
+                : _loadedSectors.Values
+                    .SelectMany(sector => sector.Comets)
+                    .FirstOrDefault(comet =>
+                        string.Equals(comet.CometId, originalAttachedCometId, StringComparison.Ordinal));
+            if (originalAttachedCometId is not null &&
+                restoredAttachedComet is not null &&
+                GodotObject.IsInstanceValid(restoredAttachedComet))
+            {
+                _ship.RestoreAttachedPose(
+                    restoredAttachedComet,
+                    originalAttachedCometId,
+                    new Vector2(
+                        (float)originalRelativeAttachment.X,
+                        (float)originalRelativeAttachment.Y),
+                    (float)originalAttachmentRotation,
+                    originalLandingLegProgress);
+                _factory.SynchronizeShipPowerDocking();
+            }
+
+            _ship.Velocity = originalShipVelocity;
+            SetControlMode(originalControlMode);
+            _factory.DebugSetPersistenceSuppressed(false);
+        }
     }
 
     private async Task RunBoostSmokeTest()
     {
         RequireSmokeCondition(
-            Mathf.IsEqualApprox(PlayerShipController.BoostMultiplier, 2.0f) &&
-            Mathf.IsEqualApprox(_ship.MovementSpeed * PlayerShipController.BoostMultiplier, 1_300.0f),
-            "Ship boost must use the configured 2.0 multiplier and a 1300 target speed.");
+            Mathf.IsEqualApprox(_ship.MovementSpeed, PlayerShipController.NormalFlightSpeed) &&
+            Mathf.IsEqualApprox(
+                PlayerShipController.NormalFlightSpeed * PlayerShipController.BoostMultiplier,
+                PlayerShipController.BoostFlightSpeed),
+            "Ship flight must use the central 975 normal and 2600 boost target speeds.");
 
         var startPosition = _ship.GlobalPosition;
         var startRotation = _ship.Rotation;
@@ -1401,7 +1680,7 @@ public partial class GameRoot : Node
             RequireSmokeCondition(
                 _ship.IsBoostActive &&
                 _ship.Velocity.Length() > _ship.MovementSpeed &&
-                _ship.Velocity.Length() <= (_ship.MovementSpeed * PlayerShipController.BoostMultiplier) + 0.5f &&
+                _ship.Velocity.Length() <= _ship.BoostMovementSpeed + 0.5f &&
                 _ship.FuelTank.CurrentFuel < boostFuelBefore,
                 "Held Shift must accelerate within its target and consume tank fuel only while moving.");
 
@@ -1463,7 +1742,7 @@ public partial class GameRoot : Node
             _ship.RestoreFuel(startFuel);
         }
 
-        GD.Print("SHIP_BOOST_SMOKE_OK: 650/1300 speed, live inventory steering, held/released Shift, swept collision");
+        GD.Print("SHIP_BOOST_SMOKE_OK: 975/2600 speed, live inventory steering, held/released Shift, swept collision");
     }
 
     private async Task RunDockingCandidateInputSmokeTest()
@@ -1520,6 +1799,39 @@ public partial class GameRoot : Node
             RequireSmokeCondition(
                 _ship.IsAttached && _ship.DockingState.AttachedCometId == comet.CometId,
                 "The configured docking action must attach to the selected live comet.");
+            _factory.RunPowerCableRuntimeSmokeTest(comet);
+
+            SetControlMode(PlayerControlMode.OnFoot);
+            _onFootPlayer.GlobalPosition = _ship.GetWorldPowerPortAnchor(ShipPowerPortId.A);
+            _onFootPlayer.ApplyInheritedVelocity(Vector2.Zero);
+            RefreshShipInteractionState(forcePromptUpdate: true);
+            RequireSmokeCondition(
+                _availablePowerInteraction is
+                {
+                    NodeId: var nodeId,
+                    PortId: var portId,
+                } &&
+                nodeId == new MachineInstanceId("player_ship") &&
+                portId == MachinePortIds.ShipPowerA,
+                "The same nearby ship socket condition used by the prompt must expose connector A to E.");
+            _shipInteractionPressGate.Reset();
+            _Input(new InputEventAction { Action = "ship_interaction", Pressed = true });
+            RequireSmokeCondition(
+                _primaryUiMode == PrimaryUiMode.PowerMenu &&
+                _powerMenu.IsOpen &&
+                _powerMenu.Visible &&
+                _powerMenu.GetParent() == _powerMenuLayer &&
+                !GetTree().Paused,
+                "E at the visible power prompt must open the live non-pausing power window on its UI layer.");
+            _Input(new InputEventKey { Keycode = Key.Escape, Pressed = true });
+            RequireSmokeCondition(
+                _primaryUiMode == PrimaryUiMode.None && !_powerMenu.IsOpen && !_powerMenu.Visible,
+                "Escape must close the live power window again.");
+            SetControlMode(PlayerControlMode.Ship);
+            RefreshDockingAvailability(force: true);
+            GD.Print(
+                "POWER_MENU_INTERACTION_SMOKE_OK: shared E condition, unconnected ship network, visible UI layer, Escape close");
+
             _Input(new InputEventAction { Action = "ship_docking", Pressed = true });
             RequireSmokeCondition(
                 _ship.IsAttached,

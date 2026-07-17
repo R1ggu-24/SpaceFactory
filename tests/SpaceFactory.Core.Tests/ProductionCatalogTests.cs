@@ -11,7 +11,7 @@ public sealed class ProductionCatalogTests
     {
         var catalog = DefaultMachineCatalog.Instance;
 
-        Assert.Equal(12, catalog.All.Count);
+        Assert.Equal(13, catalog.All.Count);
         Assert.All(
             new[]
             {
@@ -27,6 +27,7 @@ public sealed class ProductionCatalogTests
                 MachineDefinitionIds.FuelGenerator,
                 MachineDefinitionIds.StorageContainer,
                 MachineDefinitionIds.ResearchStation,
+                MachineDefinitionIds.PowerPole,
             },
             id => Assert.Equal(id, catalog.Get(id).Id));
         Assert.Equal(

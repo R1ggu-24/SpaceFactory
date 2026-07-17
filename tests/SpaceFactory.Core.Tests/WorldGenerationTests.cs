@@ -258,6 +258,8 @@ public sealed class WorldGenerationTests
             var profile = Assert.IsType<AsteroidSurfaceProfile>(comet.SurfaceProfile);
             Assert.True(profile.BuildableRadius > 0);
             Assert.True(profile.TraversableRadius > profile.BuildableRadius);
+            var expectedBuildableRatio = comet.Size == AsteroidSize.Huge ? 0.78 : 0.70;
+            Assert.Equal(expectedBuildableRatio, profile.BuildableRadius / comet.Radius, precision: 10);
             Assert.StartsWith("sectors/", profile.PersistenceKey);
         });
 

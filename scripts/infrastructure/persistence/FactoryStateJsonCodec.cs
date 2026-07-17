@@ -5,6 +5,7 @@ using System.Text.Json.Serialization;
 using SpaceFactory.Application.Factory;
 using SpaceFactory.Core.Inventory;
 using SpaceFactory.Core.Items;
+using SpaceFactory.Core.Logistics;
 using SpaceFactory.Core.Production;
 using SpaceFactory.Core.Research;
 using SpaceFactory.Core.Ships.Fuel;
@@ -17,7 +18,12 @@ namespace SpaceFactory.Infrastructure.Persistence;
 /// </summary>
 public static class FactoryStateJsonCodec
 {
-    private const int LegacyVersion = 1;
+    private const int SchemaVersion1 = 1;
+    private const int SchemaVersion2 = 2;
+    private const int SchemaVersion3 = 3;
+    private const int SchemaVersion4 = 4;
+    private const string PlayerShipMachineId = "player_ship";
+    private const double ValidationEpsilon = 0.000_001;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -63,13 +69,64 @@ public static class FactoryStateJsonCodec
     }
 
     /// <summary>
-    /// Headless-test seam covering exact player-inventory slot roundtrips and the v1-to-v2
-    /// migration. It throws when either invariant is broken.
+    /// Headless-test seam covering two independently switched ship power ports, separate power-grid
+    /// protection states, connections, exact player-inventory slot roundtrips and all v1-v3
+    /// migrations. It throws when an invariant is broken.
     /// </summary>
-    public static void RunSchemaV2SmokeTest()
+    public static void RunSchemaV4SmokeTest()
     {
+        var sourceMachine = new MachineState(
+            new MachineInstanceId("crusher-smoke"),
+            DefaultMachineCatalog.Instance.Get(MachineDefinitionIds.Crusher),
+            new MachinePlacement("comet-smoke", -40, 0, 0),
+            constructionCompleted: true).CreateSnapshot();
+        var targetMachine = new MachineState(
+            new MachineInstanceId("smelter-smoke"),
+            DefaultMachineCatalog.Instance.Get(MachineDefinitionIds.Smelter),
+            new MachinePlacement("comet-smoke", 40, 0, 0),
+            constructionCompleted: true).CreateSnapshot();
+        var powerPole = new MachineState(
+            new MachineInstanceId("power-pole-smoke"),
+            DefaultMachineCatalog.Instance.Get(MachineDefinitionIds.PowerPole),
+            new MachinePlacement("comet-smoke", 0, 80, 0.25),
+            constructionCompleted: true).CreateSnapshot();
+        var expectedBelt = new MachineConnectionSnapshot(
+            new MachineConnectionId("belt-smoke"),
+            sourceMachine.InstanceId,
+            MachinePortIds.SolidOutput,
+            targetMachine.InstanceId,
+            MachinePortIds.SolidInput,
+            ConnectionKind.ConveyorBelt);
+        var expectedShipCableA = new MachineConnectionSnapshot(
+            new MachineConnectionId("ship-cable-a-smoke"),
+            new MachineInstanceId(PlayerShipMachineId),
+            MachinePortIds.ShipPowerA,
+            powerPole.InstanceId,
+            MachinePortIds.Power1,
+            ConnectionKind.PowerCable);
+        var expectedShipCableB = new MachineConnectionSnapshot(
+            new MachineConnectionId("ship-cable-b-smoke"),
+            new MachineInstanceId(PlayerShipMachineId),
+            MachinePortIds.ShipPowerB,
+            sourceMachine.InstanceId,
+            MachinePortIds.Power,
+            ConnectionKind.PowerCable);
+        var expectedShipDocking = new ShipDockingStateData(
+            true,
+            "comet-smoke",
+            0,
+            0,
+            180,
+            -12,
+            0.4,
+            0.75,
+            2700,
+            2500,
+            0.6);
         var expected = FactoryStateData.CreateDefault() with
         {
+            Machines = [sourceMachine, targetMachine, powerPole],
+            Connections = [expectedBelt, expectedShipCableA, expectedShipCableB],
             AstronautInventory =
             [
                 new InventorySlotState(0, "iron_ore", 200),
@@ -81,15 +138,27 @@ public static class FactoryStateJsonCodec
                 new InventorySlotState(49, ProductionItemIds.EmptyFuelContainer.Value, 2),
             ],
             ActiveResearchStationId = "research-station-smoke",
+            PowerNetworkControls =
+            [
+                new PowerNetworkControlState("grid-ship-a-disabled-smoke", false, false, 0),
+                new PowerNetworkControlState("grid-ship-b-tripped-smoke", true, true, 0),
+            ],
+            ShipPower = new ShipPowerState(false, true),
+            ShipDocking = expectedShipDocking,
         };
         var json = Serialize(expected);
         if (!TryDeserialize(json, out var restored, out var roundtripError) ||
+            restored.Connections.Count != 3 ||
+            !expected.Connections.SequenceEqual(restored.Connections) ||
             !expected.AstronautInventory.SequenceEqual(restored.AstronautInventory) ||
             !expected.ShipInventory.SequenceEqual(restored.ShipInventory) ||
-            expected.ActiveResearchStationId != restored.ActiveResearchStationId)
+            expected.ActiveResearchStationId != restored.ActiveResearchStationId ||
+            !expected.PowerNetworkControls.SequenceEqual(restored.PowerNetworkControls) ||
+            expected.ShipPower != restored.ShipPower ||
+            expected.ShipDocking != restored.ShipDocking)
         {
             throw new InvalidOperationException(
-                $"Factory schema v2 roundtrip failed: {roundtripError}");
+                $"Factory schema v4 roundtrip failed: {roundtripError}");
         }
 
         var restoredInventory = new SlotInventory(InventoryConfiguration.AstronautSlotCount);
@@ -101,19 +170,55 @@ public static class FactoryStateJsonCodec
             throw new InvalidOperationException("Factory inventory slot restoration changed slot positions.");
         }
 
-        var legacyDocument = JsonNode.Parse(json)?.AsObject()
+        var versionThreeDocument = JsonNode.Parse(json)?.AsObject()
+                                   ?? throw new InvalidOperationException(
+                                       "Could not create the v3 migration fixture.");
+        versionThreeDocument["version"] = SchemaVersion3;
+        versionThreeDocument.Remove("powerNetworkControls");
+        versionThreeDocument.Remove("shipPower");
+        versionThreeDocument.Remove("shipDocking");
+        versionThreeDocument["connections"] = new JsonArray(
+            versionThreeDocument["connections"]!.AsArray()[0]!.DeepClone());
+        if (!TryDeserialize(versionThreeDocument.ToJsonString(), out var migratedV3, out var migrationV3Error) ||
+            migratedV3.Version != FactoryStateData.CurrentVersion ||
+            !new[] { expectedBelt }.SequenceEqual(migratedV3.Connections) ||
+            migratedV3.PowerNetworkControls.Count != 0 ||
+            migratedV3.ShipPower != ShipPowerState.Default ||
+            migratedV3.ShipDocking != ShipDockingStateData.Detached)
+        {
+            throw new InvalidOperationException(
+                $"Factory schema v3 migration failed: {migrationV3Error}");
+        }
+
+        var versionTwoDocument = JsonNode.Parse(versionThreeDocument.ToJsonString())?.AsObject()
+                                 ?? throw new InvalidOperationException("Could not create the v2 migration fixture.");
+        versionTwoDocument["version"] = SchemaVersion2;
+        versionTwoDocument.Remove("connections");
+        if (!TryDeserialize(versionTwoDocument.ToJsonString(), out var migratedV2, out var migrationV2Error) ||
+            migratedV2.Version != FactoryStateData.CurrentVersion || migratedV2.Connections.Count != 0 ||
+            !expected.AstronautInventory.SequenceEqual(migratedV2.AstronautInventory) ||
+            !expected.ShipInventory.SequenceEqual(migratedV2.ShipInventory) ||
+            migratedV2.PowerNetworkControls.Count != 0 ||
+            migratedV2.ShipPower != ShipPowerState.Default ||
+            migratedV2.ShipDocking != ShipDockingStateData.Detached)
+        {
+            throw new InvalidOperationException(
+                $"Factory schema v2 migration failed: {migrationV2Error}");
+        }
+
+        var legacyDocument = JsonNode.Parse(versionTwoDocument.ToJsonString())?.AsObject()
                              ?? throw new InvalidOperationException("Could not create the v1 migration fixture.");
-        legacyDocument["version"] = LegacyVersion;
+        legacyDocument["version"] = SchemaVersion1;
         legacyDocument.Remove("astronautInventory");
         legacyDocument.Remove("shipInventory");
         legacyDocument.Remove("activeResearchStationId");
-        if (!TryDeserialize(legacyDocument.ToJsonString(), out var migrated, out var migrationError) ||
-            migrated.Version != FactoryStateData.CurrentVersion ||
-            migrated.AstronautInventory.Count != 0 || migrated.ShipInventory.Count != 0 ||
-            migrated.ActiveResearchStationId is not null)
+        if (!TryDeserialize(legacyDocument.ToJsonString(), out var migratedV1, out var migrationV1Error) ||
+            migratedV1.Version != FactoryStateData.CurrentVersion || migratedV1.Connections.Count != 0 ||
+            migratedV1.AstronautInventory.Count != 0 || migratedV1.ShipInventory.Count != 0 ||
+            migratedV1.ActiveResearchStationId is not null)
         {
             throw new InvalidOperationException(
-                $"Factory schema v1 migration failed: {migrationError}");
+                $"Factory schema v1 migration failed: {migrationV1Error}");
         }
 
         var corruptDocument = JsonNode.Parse(json)?.AsObject()
@@ -124,18 +229,83 @@ public static class FactoryStateJsonCodec
         {
             throw new InvalidOperationException("An overfilled persisted inventory slot was accepted.");
         }
+
+        var corruptConnectionDocument = JsonNode.Parse(json)?.AsObject()
+                                        ?? throw new InvalidOperationException(
+                                            "Could not create the connection corruption fixture.");
+        corruptConnectionDocument["connections"]![0]!["targetMachineId"] = "missing-machine";
+        if (TryDeserialize(corruptConnectionDocument.ToJsonString(), out _, out _))
+        {
+            throw new InvalidOperationException("A dangling persisted machine connection was accepted.");
+        }
+
+        var duplicateControlDocument = JsonNode.Parse(json)?.AsObject()
+                                       ?? throw new InvalidOperationException(
+                                           "Could not create the power-control corruption fixture.");
+        duplicateControlDocument["powerNetworkControls"]!.AsArray().Add(
+            duplicateControlDocument["powerNetworkControls"]![0]!.DeepClone());
+        if (TryDeserialize(duplicateControlDocument.ToJsonString(), out _, out _))
+        {
+            throw new InvalidOperationException("A duplicated persisted power-network control was accepted.");
+        }
+
+        var invalidDockingDocument = JsonNode.Parse(json)?.AsObject()
+                                     ?? throw new InvalidOperationException(
+                                         "Could not create the docking corruption fixture.");
+        invalidDockingDocument["shipDocking"]!["landingLegProgress"] = 1.5;
+        if (TryDeserialize(invalidDockingDocument.ToJsonString(), out _, out _))
+        {
+            throw new InvalidOperationException("An invalid persisted landing-leg progress was accepted.");
+        }
+
+        var detachedCableDocument = JsonNode.Parse(json)?.AsObject()
+                                    ?? throw new InvalidOperationException(
+                                        "Could not create the detached ship-cable fixture.");
+        detachedCableDocument["shipDocking"]!["isAttached"] = false;
+        detachedCableDocument["shipDocking"]!["cometId"] = null;
+        if (TryDeserialize(detachedCableDocument.ToJsonString(), out _, out _))
+        {
+            throw new InvalidOperationException("A ship cable was accepted while the ship was detached.");
+        }
+
+        var occupiedShipPortDocument = JsonNode.Parse(json)?.AsObject()
+                                       ?? throw new InvalidOperationException(
+                                           "Could not create the occupied ship-port fixture.");
+        occupiedShipPortDocument["connections"]!.AsArray().Add(new JsonObject
+        {
+            ["connectionId"] = "duplicate-ship-port-smoke",
+            ["sourceMachineId"] = PlayerShipMachineId,
+            ["sourcePortId"] = MachinePortIds.ShipPowerA.Value,
+            ["targetMachineId"] = targetMachine.InstanceId.Value,
+            ["targetPortId"] = MachinePortIds.Power.Value,
+            ["kind"] = ConnectionKind.PowerCable.ToString(),
+        });
+        if (TryDeserialize(occupiedShipPortDocument.ToJsonString(), out _, out _))
+        {
+            throw new InvalidOperationException("A second cable on one ship power port was accepted.");
+        }
     }
 
     private static FactoryStateDocument ToDocument(FactoryStateData state) => new()
     {
         Version = state.Version,
         Machines = state.Machines.Select(ToDto).ToList(),
+        Connections = state.Connections
+            .OrderBy(connection => connection.ConnectionId.Value, StringComparer.Ordinal)
+            .Select(ToDto)
+            .ToList(),
         Research = ToDto(state.Research),
         FirstBasicGeneratorBuilt = state.FirstBasicGeneratorBuilt,
         ShipFuel = state.ShipFuel,
         AstronautInventory = state.AstronautInventory.Select(ToDto).ToList(),
         ShipInventory = state.ShipInventory.Select(ToDto).ToList(),
         ActiveResearchStationId = state.ActiveResearchStationId,
+        PowerNetworkControls = state.PowerNetworkControls
+            .OrderBy(control => control.NetworkId, StringComparer.Ordinal)
+            .Select(ToDto)
+            .ToList(),
+        ShipPower = ToDto(state.ShipPower),
+        ShipDocking = ToDto(state.ShipDocking),
         LastSimulatedUtcByComet = state.LastSimulatedUtcByComet
             .OrderBy(pair => pair.Key, StringComparer.Ordinal)
             .Select(pair => new CometSimulationTimestampDto
@@ -177,6 +347,16 @@ public static class FactoryStateJsonCodec
         Amount = slot.Amount,
     };
 
+    private static MachineConnectionDto ToDto(MachineConnectionSnapshot connection) => new()
+    {
+        ConnectionId = connection.ConnectionId.Value,
+        SourceMachineId = connection.SourceMachineId.Value,
+        SourcePortId = connection.SourcePortId.Value,
+        TargetMachineId = connection.TargetMachineId.Value,
+        TargetPortId = connection.TargetPortId.Value,
+        Kind = connection.Kind.ToString(),
+    };
+
     private static ResearchStateDto ToDto(ResearchStateSnapshot research) => new()
     {
         CompletedResearch = research.CompletedResearch.Select(id => id.Value).ToList(),
@@ -193,14 +373,43 @@ public static class FactoryStateJsonCodec
         Amount = slot.Amount,
     };
 
+    private static PowerNetworkControlDto ToDto(PowerNetworkControlState control) => new()
+    {
+        NetworkId = control.NetworkId,
+        IsEnabled = control.IsEnabled,
+        BreakerTripped = control.BreakerTripped,
+        OverloadElapsedSeconds = control.OverloadElapsedSeconds,
+    };
+
+    private static ShipPowerDto ToDto(ShipPowerState shipPower) => new()
+    {
+        ConnectorAEnabled = shipPower.ConnectorAEnabled,
+        ConnectorBEnabled = shipPower.ConnectorBEnabled,
+    };
+
+    private static ShipDockingDto ToDto(ShipDockingStateData docking) => new()
+    {
+        IsAttached = docking.IsAttached,
+        CometId = docking.CometId,
+        SectorX = docking.SectorX,
+        SectorY = docking.SectorY,
+        RelativePositionX = docking.RelativePositionX,
+        RelativePositionY = docking.RelativePositionY,
+        RelativeRotationRadians = docking.RelativeRotationRadians,
+        LandingLegProgress = docking.LandingLegProgress,
+        GlobalPositionX = docking.GlobalPositionX,
+        GlobalPositionY = docking.GlobalPositionY,
+        GlobalRotationRadians = docking.GlobalRotationRadians,
+    };
+
     private static FactoryStateData FromDocument(FactoryStateDocument document)
     {
         if (document.Version is null ||
-            document.Version is not (LegacyVersion or FactoryStateData.CurrentVersion))
+            document.Version is not (SchemaVersion1 or SchemaVersion2 or SchemaVersion3 or SchemaVersion4))
         {
             throw new InvalidDataException(
                 $"Factory save version {document.Version?.ToString() ?? "<missing>"} is unsupported; " +
-                $"expected {LegacyVersion} or {FactoryStateData.CurrentVersion}.");
+                $"expected {SchemaVersion1}, {SchemaVersion2}, {SchemaVersion3} or {SchemaVersion4}.");
         }
 
         if (document.Machines is null || document.Research is null ||
@@ -210,10 +419,23 @@ public static class FactoryStateJsonCodec
             throw new InvalidDataException("The factory save is missing required root fields.");
         }
 
-        var isLegacy = document.Version == LegacyVersion;
-        if (!isLegacy && (document.AstronautInventory is null || document.ShipInventory is null))
+        var hasPlayerInventories = document.Version >= SchemaVersion2;
+        var hasConnections = document.Version >= SchemaVersion3;
+        var hasPowerGridState = document.Version >= SchemaVersion4;
+        if (hasPlayerInventories && (document.AstronautInventory is null || document.ShipInventory is null))
         {
             throw new InvalidDataException("The factory save is missing player inventory fields.");
+        }
+
+        if (hasConnections && document.Connections is null)
+        {
+            throw new InvalidDataException("The factory save is missing machine connections.");
+        }
+
+        if (hasPowerGridState &&
+            (document.PowerNetworkControls is null || document.ShipPower is null || document.ShipDocking is null))
+        {
+            throw new InvalidDataException("The factory save is missing power-grid or ship state.");
         }
 
         var timestamps = new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal);
@@ -236,13 +458,17 @@ public static class FactoryStateJsonCodec
         return new FactoryStateData(
             FactoryStateData.CurrentVersion,
             document.Machines.Select(FromDto).ToArray(),
+            hasConnections ? document.Connections!.Select(FromDto).ToArray() : [],
             FromDto(document.Research),
             document.FirstBasicGeneratorBuilt.Value,
             document.ShipFuel.Value,
             timestamps,
-            isLegacy ? [] : document.AstronautInventory!.Select(FromDto).ToArray(),
-            isLegacy ? [] : document.ShipInventory!.Select(FromDto).ToArray(),
-            isLegacy ? null : document.ActiveResearchStationId);
+            hasPlayerInventories ? document.AstronautInventory!.Select(FromDto).ToArray() : [],
+            hasPlayerInventories ? document.ShipInventory!.Select(FromDto).ToArray() : [],
+            hasPlayerInventories ? document.ActiveResearchStationId : null,
+            hasPowerGridState ? document.PowerNetworkControls!.Select(FromDto).ToArray() : [],
+            hasPowerGridState ? FromDto(document.ShipPower) : ShipPowerState.Default,
+            hasPowerGridState ? FromDto(document.ShipDocking) : ShipDockingStateData.Detached);
     }
 
     private static MachineStateSnapshot FromDto(MachineStateDto? dto)
@@ -301,6 +527,82 @@ public static class FactoryStateJsonCodec
         return new MachineInventorySlotSnapshot(dto.Index.Value, new ItemId(dto.ItemId), dto.Amount.Value);
     }
 
+    private static MachineConnectionSnapshot FromDto(MachineConnectionDto? dto)
+    {
+        ArgumentNullException.ThrowIfNull(dto);
+        if (string.IsNullOrWhiteSpace(dto.ConnectionId) ||
+            string.IsNullOrWhiteSpace(dto.SourceMachineId) ||
+            string.IsNullOrWhiteSpace(dto.SourcePortId) ||
+            string.IsNullOrWhiteSpace(dto.TargetMachineId) ||
+            string.IsNullOrWhiteSpace(dto.TargetPortId) ||
+            string.IsNullOrWhiteSpace(dto.Kind) ||
+            !TryParseDefinedEnum(dto.Kind, out ConnectionKind kind))
+        {
+            throw new InvalidDataException("A persisted machine connection is incomplete or invalid.");
+        }
+
+        return new MachineConnectionSnapshot(
+            new MachineConnectionId(dto.ConnectionId),
+            new MachineInstanceId(dto.SourceMachineId),
+            new MachinePortId(dto.SourcePortId),
+            new MachineInstanceId(dto.TargetMachineId),
+            new MachinePortId(dto.TargetPortId),
+            kind);
+    }
+
+    private static PowerNetworkControlState FromDto(PowerNetworkControlDto? dto)
+    {
+        ArgumentNullException.ThrowIfNull(dto);
+        if (string.IsNullOrWhiteSpace(dto.NetworkId) || dto.IsEnabled is null ||
+            dto.BreakerTripped is null || dto.OverloadElapsedSeconds is null)
+        {
+            throw new InvalidDataException("A persisted power-network control is incomplete.");
+        }
+
+        return new PowerNetworkControlState(
+            dto.NetworkId,
+            dto.IsEnabled.Value,
+            dto.BreakerTripped.Value,
+            dto.OverloadElapsedSeconds.Value);
+    }
+
+    private static ShipPowerState FromDto(ShipPowerDto? dto)
+    {
+        ArgumentNullException.ThrowIfNull(dto);
+        if (dto.ConnectorAEnabled is null || dto.ConnectorBEnabled is null)
+        {
+            throw new InvalidDataException("The persisted ship power state is incomplete.");
+        }
+
+        return new ShipPowerState(dto.ConnectorAEnabled.Value, dto.ConnectorBEnabled.Value);
+    }
+
+    private static ShipDockingStateData FromDto(ShipDockingDto? dto)
+    {
+        ArgumentNullException.ThrowIfNull(dto);
+        if (dto.IsAttached is null || dto.SectorX is null || dto.SectorY is null ||
+            dto.RelativePositionX is null || dto.RelativePositionY is null ||
+            dto.RelativeRotationRadians is null || dto.LandingLegProgress is null ||
+            dto.GlobalPositionX is null || dto.GlobalPositionY is null ||
+            dto.GlobalRotationRadians is null)
+        {
+            throw new InvalidDataException("The persisted ship docking state is incomplete.");
+        }
+
+        return new ShipDockingStateData(
+            dto.IsAttached.Value,
+            dto.CometId,
+            dto.SectorX.Value,
+            dto.SectorY.Value,
+            dto.RelativePositionX.Value,
+            dto.RelativePositionY.Value,
+            dto.RelativeRotationRadians.Value,
+            dto.LandingLegProgress.Value,
+            dto.GlobalPositionX.Value,
+            dto.GlobalPositionY.Value,
+            dto.GlobalRotationRadians.Value);
+    }
+
     private static ResearchStateSnapshot FromDto(ResearchStateDto dto)
     {
         if (dto.CompletedResearch is null || dto.ProgressSeconds is null || dto.IsEnabled is null ||
@@ -338,8 +640,10 @@ public static class FactoryStateJsonCodec
                 $"Factory save version {state.Version} is unsupported; expected {FactoryStateData.CurrentVersion}.");
         }
 
-        if (state.Machines is null || state.Research is null || state.LastSimulatedUtcByComet is null ||
+        if (state.Machines is null || state.Connections is null || state.Research is null ||
+            state.LastSimulatedUtcByComet is null ||
             state.AstronautInventory is null || state.ShipInventory is null ||
+            state.PowerNetworkControls is null || state.ShipPower is null || state.ShipDocking is null ||
             !double.IsFinite(state.ShipFuel) || state.ShipFuel < 0 ||
             state.ShipFuel > ShipFuelConfiguration.TankCapacity)
         {
@@ -370,6 +674,10 @@ public static class FactoryStateJsonCodec
 
             Validate(machine);
         }
+
+        ValidatePowerNetworkControls(state.PowerNetworkControls);
+        Validate(state.ShipDocking);
+        ValidateConnections(state.Connections, state.Machines, state.ShipDocking);
 
         Validate(state.Research);
         var cometIds = new HashSet<string>(StringComparer.Ordinal);
@@ -416,6 +724,230 @@ public static class FactoryStateJsonCodec
                 throw new InvalidDataException($"Machine '{machineId}' contains an invalid inventory slot.");
             }
         }
+    }
+
+    private static void ValidateConnections(
+        IReadOnlyList<MachineConnectionSnapshot> connections,
+        IReadOnlyList<MachineStateSnapshot> machines,
+        ShipDockingStateData shipDocking)
+    {
+        var machinesById = machines.ToDictionary(machine => machine.InstanceId.Value, StringComparer.Ordinal);
+        var connectionIds = new HashSet<string>(StringComparer.Ordinal);
+        var endpointConnectionCounts = new Dictionary<(string MachineId, string PortId), int>();
+        var endpointPairs = new HashSet<(
+            ConnectionKind Kind,
+            string SourceMachineId,
+            string SourcePortId,
+            string TargetMachineId,
+            string TargetPortId)>();
+
+        foreach (var connection in connections)
+        {
+            if (connection is null ||
+                string.IsNullOrWhiteSpace(connection.ConnectionId.Value) ||
+                string.IsNullOrWhiteSpace(connection.SourceMachineId.Value) ||
+                string.IsNullOrWhiteSpace(connection.SourcePortId.Value) ||
+                string.IsNullOrWhiteSpace(connection.TargetMachineId.Value) ||
+                string.IsNullOrWhiteSpace(connection.TargetPortId.Value) ||
+                !Enum.IsDefined(connection.Kind) ||
+                !connectionIds.Add(connection.ConnectionId.Value) ||
+                connection.SourceMachineId == connection.TargetMachineId)
+            {
+                throw new InvalidDataException("The factory save contains an invalid machine connection.");
+            }
+
+            if (!DefaultConnectionTypeCatalog.Instance.TryGet(connection.Kind, out var connectionType) ||
+                connectionType is null)
+            {
+                throw new InvalidDataException(
+                    $"Machine connection '{connection.ConnectionId}' has an unknown connection type.");
+            }
+
+            var source = ResolvePersistedEndpoint(
+                connection.SourceMachineId,
+                connection.SourcePortId,
+                machinesById,
+                shipDocking);
+            var target = ResolvePersistedEndpoint(
+                connection.TargetMachineId,
+                connection.TargetPortId,
+                machinesById,
+                shipDocking);
+            if (!string.Equals(source.CometId, target.CometId, StringComparison.Ordinal) ||
+                source.Medium != connectionType.Medium || target.Medium != connectionType.Medium ||
+                (connectionType.IsDirectional && (!source.CanSend || !target.CanReceive)) ||
+                (!connectionType.IsDirectional &&
+                 !((source.CanSend && target.CanReceive) || (target.CanSend && source.CanReceive))) ||
+                (connectionType.Medium != TransportMedium.Power &&
+                 !HaveCompatiblePersistedItems(source.AllowedItemIds, target.AllowedItemIds)))
+            {
+                throw new InvalidDataException(
+                    $"Machine connection '{connection.ConnectionId}' has missing or incompatible endpoints.");
+            }
+
+            ValidateEndpointCapacity(
+                connection.ConnectionId,
+                connection.SourceMachineId,
+                connection.SourcePortId,
+                source.MaximumConnections,
+                endpointConnectionCounts);
+            ValidateEndpointCapacity(
+                connection.ConnectionId,
+                connection.TargetMachineId,
+                connection.TargetPortId,
+                target.MaximumConnections,
+                endpointConnectionCounts);
+
+            var sourceMachineId = connection.SourceMachineId.Value;
+            var sourcePortId = connection.SourcePortId.Value;
+            var targetMachineId = connection.TargetMachineId.Value;
+            var targetPortId = connection.TargetPortId.Value;
+            if (!connectionType.IsDirectional &&
+                CompareEndpoints(sourceMachineId, sourcePortId, targetMachineId, targetPortId) > 0)
+            {
+                (sourceMachineId, targetMachineId) = (targetMachineId, sourceMachineId);
+                (sourcePortId, targetPortId) = (targetPortId, sourcePortId);
+            }
+
+            if (!endpointPairs.Add((
+                    connection.Kind,
+                    sourceMachineId,
+                    sourcePortId,
+                    targetMachineId,
+                    targetPortId)))
+            {
+                throw new InvalidDataException(
+                    $"Machine connection '{connection.ConnectionId}' duplicates an existing endpoint pair.");
+            }
+        }
+    }
+
+    private static PersistedEndpointInfo ResolvePersistedEndpoint(
+        MachineInstanceId machineId,
+        MachinePortId portId,
+        IReadOnlyDictionary<string, MachineStateSnapshot> machinesById,
+        ShipDockingStateData shipDocking)
+    {
+        if (string.Equals(machineId.Value, PlayerShipMachineId, StringComparison.Ordinal))
+        {
+            if (!shipDocking.IsAttached || string.IsNullOrWhiteSpace(shipDocking.CometId) ||
+                (portId != MachinePortIds.ShipPowerA && portId != MachinePortIds.ShipPowerB))
+            {
+                throw new InvalidDataException(
+                    $"Ship power endpoint '{machineId}/{portId}' is unavailable or invalid.");
+            }
+
+            return new PersistedEndpointInfo(
+                shipDocking.CometId,
+                TransportMedium.Power,
+                true,
+                true,
+                1,
+                null);
+        }
+
+        if (!machinesById.TryGetValue(machineId.Value, out var machine) || machine.Placement is null ||
+            !DefaultMachinePortCatalog.Instance.TryGet(machine.DefinitionId, portId, out var port) ||
+            port is null)
+        {
+            throw new InvalidDataException($"Machine endpoint '{machineId}/{portId}' does not exist.");
+        }
+
+        return new PersistedEndpointInfo(
+            machine.Placement.CometId,
+            port.Medium,
+            port.CanSend,
+            port.CanReceive,
+            port.MaximumConnections,
+            port.AllowedItemIds);
+    }
+
+    private static void ValidateEndpointCapacity(
+        MachineConnectionId connectionId,
+        MachineInstanceId machineId,
+        MachinePortId portId,
+        int maximumConnections,
+        IDictionary<(string MachineId, string PortId), int> endpointConnectionCounts)
+    {
+        var key = (machineId.Value, portId.Value);
+        endpointConnectionCounts.TryGetValue(key, out var count);
+        count++;
+        if (count > maximumConnections)
+        {
+            throw new InvalidDataException(
+                $"Machine connection '{connectionId}' exceeds endpoint capacity at '{machineId}/{portId}'.");
+        }
+
+        endpointConnectionCounts[key] = count;
+    }
+
+    private static bool HaveCompatiblePersistedItems(
+        IReadOnlyCollection<ItemId>? sourceItems,
+        IReadOnlyCollection<ItemId>? targetItems)
+    {
+        if (sourceItems is null || targetItems is null)
+        {
+            return true;
+        }
+
+        return sourceItems.Any(targetItems.Contains);
+    }
+
+    private static void ValidatePowerNetworkControls(
+        IReadOnlyList<PowerNetworkControlState> controls)
+    {
+        var networkIds = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var control in controls)
+        {
+            if (control is null || string.IsNullOrWhiteSpace(control.NetworkId) ||
+                !networkIds.Add(control.NetworkId) ||
+                !double.IsFinite(control.OverloadElapsedSeconds) ||
+                control.OverloadElapsedSeconds < 0 ||
+                control.OverloadElapsedSeconds >=
+                SpaceFactory.Core.Power.PowerGridConfiguration.OverloadToleranceSeconds ||
+                (control.BreakerTripped && control.OverloadElapsedSeconds > ValidationEpsilon))
+            {
+                throw new InvalidDataException(
+                    "Persisted power-network controls must be finite and uniquely identified.");
+            }
+        }
+    }
+
+    private static void Validate(ShipDockingStateData docking)
+    {
+        if (!double.IsFinite(docking.RelativePositionX) ||
+            !double.IsFinite(docking.RelativePositionY) ||
+            !double.IsFinite(docking.RelativeRotationRadians) ||
+            !double.IsFinite(docking.LandingLegProgress) ||
+            docking.LandingLegProgress < 0 || docking.LandingLegProgress > 1 ||
+            !double.IsFinite(docking.GlobalPositionX) ||
+            !double.IsFinite(docking.GlobalPositionY) ||
+            !double.IsFinite(docking.GlobalRotationRadians) ||
+            (docking.IsAttached && string.IsNullOrWhiteSpace(docking.CometId)) ||
+            (!docking.IsAttached && docking.CometId is not null))
+        {
+            throw new InvalidDataException("The persisted ship docking state is invalid.");
+        }
+    }
+
+    private readonly record struct PersistedEndpointInfo(
+        string CometId,
+        TransportMedium Medium,
+        bool CanSend,
+        bool CanReceive,
+        int MaximumConnections,
+        IReadOnlyCollection<ItemId>? AllowedItemIds);
+
+    private static int CompareEndpoints(
+        string firstMachineId,
+        string firstPortId,
+        string secondMachineId,
+        string secondPortId)
+    {
+        var machineComparison = string.Compare(firstMachineId, secondMachineId, StringComparison.Ordinal);
+        return machineComparison != 0
+            ? machineComparison
+            : string.Compare(firstPortId, secondPortId, StringComparison.Ordinal);
     }
 
     private static void ValidatePlayerInventory(
@@ -473,6 +1005,8 @@ public static class FactoryStateJsonCodec
 
         public List<MachineStateDto>? Machines { get; set; }
 
+        public List<MachineConnectionDto>? Connections { get; set; }
+
         public ResearchStateDto? Research { get; set; }
 
         public bool? FirstBasicGeneratorBuilt { get; set; }
@@ -484,6 +1018,12 @@ public static class FactoryStateJsonCodec
         public List<InventorySlotDto>? ShipInventory { get; set; }
 
         public string? ActiveResearchStationId { get; set; }
+
+        public List<PowerNetworkControlDto>? PowerNetworkControls { get; set; }
+
+        public ShipPowerDto? ShipPower { get; set; }
+
+        public ShipDockingDto? ShipDocking { get; set; }
 
         public List<CometSimulationTimestampDto>? LastSimulatedUtcByComet { get; set; }
     }
@@ -524,6 +1064,64 @@ public static class FactoryStateJsonCodec
         public double? RelativePositionY { get; set; }
 
         public double? RelativeRotationRadians { get; set; }
+    }
+
+    private sealed class MachineConnectionDto
+    {
+        public string? ConnectionId { get; set; }
+
+        public string? SourceMachineId { get; set; }
+
+        public string? SourcePortId { get; set; }
+
+        public string? TargetMachineId { get; set; }
+
+        public string? TargetPortId { get; set; }
+
+        public string? Kind { get; set; }
+    }
+
+    private sealed class PowerNetworkControlDto
+    {
+        public string? NetworkId { get; set; }
+
+        public bool? IsEnabled { get; set; }
+
+        public bool? BreakerTripped { get; set; }
+
+        public double? OverloadElapsedSeconds { get; set; }
+    }
+
+    private sealed class ShipPowerDto
+    {
+        public bool? ConnectorAEnabled { get; set; }
+
+        public bool? ConnectorBEnabled { get; set; }
+    }
+
+    private sealed class ShipDockingDto
+    {
+        public bool? IsAttached { get; set; }
+
+        public string? CometId { get; set; }
+
+        public int? SectorX { get; set; }
+
+        public int? SectorY { get; set; }
+
+        public double? RelativePositionX { get; set; }
+
+        public double? RelativePositionY { get; set; }
+
+        public double? RelativeRotationRadians { get; set; }
+
+        public double? LandingLegProgress { get; set; }
+
+        public double? GlobalPositionX { get; set; }
+
+        public double? GlobalPositionY { get; set; }
+
+        public double? GlobalRotationRadians { get; set; }
     }
 
     private sealed class MachineInventorySlotDto

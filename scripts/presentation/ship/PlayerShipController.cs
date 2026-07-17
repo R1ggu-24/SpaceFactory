@@ -1,4 +1,6 @@
 using Godot;
+using SpaceFactory.Core.Power;
+using SpaceFactory.Core.Ships;
 using SpaceFactory.Core.Ships.Docking;
 using SpaceFactory.Core.Ships.Fuel;
 
@@ -9,7 +11,9 @@ public partial class PlayerShipController : CharacterBody2D
     public const float BaseSpriteScale = 0.22f;
     public const float VisualScaleMultiplier = 1.8f;
     public const float ShipCameraZoom = 0.22f;
-    public const float BoostMultiplier = 2.0f;
+    public const float NormalFlightSpeed = (float)ShipFlightConfiguration.NormalFlightSpeed;
+    public const float BoostFlightSpeed = (float)ShipFlightConfiguration.BoostFlightSpeed;
+    public const float BoostMultiplier = (float)ShipFlightConfiguration.BoostSpeedMultiplier;
     public const float CockpitEntryOffsetY = -165.0f;
     public const float DockingHullReach = 248.0f;
     public const float DockingCenterClearance = 270.0f;
@@ -39,6 +43,15 @@ public partial class PlayerShipController : CharacterBody2D
     private const float EngineEmitterY = 100.0f * VisualScaleMultiplier;
     private const string BoostAction = "ship_boost";
 
+    // The sockets sit just outside the aft side armour. Keeping the coordinates
+    // local to the CharacterBody makes them follow translation and rotation
+    // without a per-frame presentation update.
+    private static readonly Vector2[] PowerPortAnchors =
+    [
+        new(-238, 92),
+        new(238, 92),
+    ];
+
     private static readonly Color NormalGlowColor = new(0.08f, 0.46f, 1.0f, 0.34f);
     private static readonly Color BoostGlowColor = new(0.08f, 0.72f, 1.0f, 0.56f);
     private static readonly Color NormalFlameColor = new(0.10f, 0.62f, 1.0f, 0.76f);
@@ -47,19 +60,23 @@ public partial class PlayerShipController : CharacterBody2D
     private static readonly Color BoostCoreColor = new(0.92f, 1.0f, 1.0f, 1.0f);
 
     [Export]
-    public float MovementSpeed { get; set; } = 650.0f;
+    public float MovementSpeed { get; set; } = NormalFlightSpeed;
 
     [Export]
-    public float Acceleration { get; set; } = 1_350.0f;
+    public float BoostMovementSpeed { get; set; } = BoostFlightSpeed;
 
     [Export]
-    public float Deceleration { get; set; } = 1_750.0f;
+    public float Acceleration { get; set; } = (float)ShipFlightConfiguration.NormalAcceleration;
 
     [Export]
-    public float BoostAcceleration { get; set; } = 3_250.0f;
+    public float Deceleration { get; set; } = (float)ShipFlightConfiguration.NormalDeceleration;
 
     [Export]
-    public float BoostReleaseDeceleration { get; set; } = 4_200.0f;
+    public float BoostAcceleration { get; set; } = (float)ShipFlightConfiguration.BoostAcceleration;
+
+    [Export]
+    public float BoostReleaseDeceleration { get; set; } =
+        (float)ShipFlightConfiguration.BoostReleaseDeceleration;
 
     [Export]
     public float RotationSpeed { get; set; } = 6.0f;
@@ -83,6 +100,11 @@ public partial class PlayerShipController : CharacterBody2D
     private bool _boostInputArmed = true;
     private bool _boostFuelWarningReported;
     private Node2D? _attachedComet;
+    private readonly ShipPowerPortVisualState[] _powerPortStates =
+    [
+        ShipPowerPortVisualState.Free,
+        ShipPowerPortVisualState.Free,
+    ];
 
     public event Action? BoostFuelUnavailable;
 
@@ -90,6 +112,13 @@ public partial class PlayerShipController : CharacterBody2D
 
     public override void _Ready()
     {
+        if (PowerPortAnchors.Length != PowerGridConfiguration.ShipPortCount)
+        {
+            throw new InvalidOperationException(
+                $"Ship presentation exposes {PowerPortAnchors.Length} power ports, " +
+                $"but gameplay is configured for {PowerGridConfiguration.ShipPortCount}.");
+        }
+
         GetNode<Sprite2D>("Sprite").Scale = Vector2.One * BaseSpriteScale * VisualScaleMultiplier;
         GetNode<CollisionPolygon2D>("CollisionPolygon2D").Polygon = ScaledCollisionPolygon;
         GetNode<Marker2D>("CockpitEntryPoint").Position = new Vector2(0, CockpitEntryOffsetY);
@@ -157,8 +186,8 @@ public partial class PlayerShipController : CharacterBody2D
             _boostFuelWarningReported = false;
         }
 
-        var speedMultiplier = IsBoostActive ? BoostMultiplier : 1.0f;
-        var targetVelocity = direction * MovementSpeed * speedMultiplier;
+        var targetSpeed = IsBoostActive ? BoostMovementSpeed : MovementSpeed;
+        var targetVelocity = direction * targetSpeed;
         var isSlowingFromBoost = !IsBoostActive && Velocity.LengthSquared() > MovementSpeed * MovementSpeed;
         var velocityChange = !hasMovementInput
             ? Deceleration
@@ -170,7 +199,7 @@ public partial class PlayerShipController : CharacterBody2D
         Velocity = Velocity.MoveToward(targetVelocity, velocityChange * (float)delta);
 
         // CharacterBody2D performs a swept collision query along the full motion vector,
-        // so the doubled speed remains collision-safe without manual teleport-style steps.
+        // so the increased target speeds remain collision-safe without manual teleport-style steps.
         MoveAndSlide();
         var boostMovedShip = IsBoostActive && GetLastMotion().LengthSquared() > 0.01f;
         if (boostMovedShip)
@@ -242,6 +271,38 @@ public partial class PlayerShipController : CharacterBody2D
         }
 
         DrawLandingLegs();
+        DrawPowerPorts();
+    }
+
+    /// <summary>
+    /// Returns the stable local cable anchor for socket A or B.
+    /// </summary>
+    public Vector2 GetLocalPowerPortAnchor(ShipPowerPortId port) =>
+        PowerPortAnchors[GetPowerPortIndex(port)];
+
+    /// <summary>
+    /// Returns the socket position in world space. This is the canonical visual
+    /// endpoint for cable previews and installed cable views.
+    /// </summary>
+    public Vector2 GetWorldPowerPortAnchor(ShipPowerPortId port) =>
+        ToGlobal(GetLocalPowerPortAnchor(port));
+
+    public ShipPowerPortVisualState GetPowerPortVisualState(ShipPowerPortId port) =>
+        _powerPortStates[GetPowerPortIndex(port)];
+
+    public void SetPowerPortVisualState(
+        ShipPowerPortId port,
+        ShipPowerPortVisualState state)
+    {
+        var index = GetPowerPortIndex(port);
+        var normalized = state.Normalized();
+        if (_powerPortStates[index] == normalized)
+        {
+            return;
+        }
+
+        _powerPortStates[index] = normalized;
+        QueueRedraw();
     }
 
     public void SetControlActive(bool active)
@@ -264,9 +325,58 @@ public partial class PlayerShipController : CharacterBody2D
 
     public void RestoreFuel(double currentFuel)
     {
-        FuelTank = new ShipFuelTank(currentFuel);
+        FuelTank.RestoreFuel(currentFuel);
         _boostFuelWarningReported = false;
         FuelChanged?.Invoke(FuelTank.CurrentFuel);
+    }
+
+    public void RestoreFreePose(
+        Vector2 globalPosition,
+        float globalRotation,
+        double landingLegProgress = 0)
+    {
+        if (!globalPosition.IsFinite() || !float.IsFinite(globalRotation))
+        {
+            throw new ArgumentException("The persisted free-flight pose is invalid.");
+        }
+
+        _attachedComet = null;
+        DockingState.RestoreDetached(landingLegProgress);
+        GlobalPosition = globalPosition;
+        GlobalRotation = globalRotation;
+        Velocity = Vector2.Zero;
+        IsBoostActive = false;
+        _engineIntensity = 0;
+        _engineBoostIntensity = 0;
+        QueueRedraw();
+    }
+
+    public void RestoreAttachedPose(
+        Node2D comet,
+        string cometId,
+        Vector2 relativePosition,
+        float relativeRotation,
+        double landingLegProgress)
+    {
+        ArgumentNullException.ThrowIfNull(comet);
+        if (!GodotObject.IsInstanceValid(comet) || !relativePosition.IsFinite() ||
+            !float.IsFinite(relativeRotation))
+        {
+            throw new ArgumentException("The persisted attached ship pose is invalid.");
+        }
+
+        _attachedComet = comet;
+        DockingState.RestoreAttached(
+            cometId,
+            new SpaceFactory.Core.Common.WorldPosition(relativePosition.X, relativePosition.Y),
+            relativeRotation,
+            landingLegProgress);
+        Velocity = Vector2.Zero;
+        IsBoostActive = false;
+        _engineIntensity = 0;
+        _engineBoostIntensity = 0;
+        ApplyAttachedPose();
+        QueueRedraw();
     }
 
     public ShipDockingDecision ExecuteDocking(
@@ -418,6 +528,75 @@ public partial class PlayerShipController : CharacterBody2D
                 8,
                 true);
         }
+    }
+
+    private void DrawPowerPorts()
+    {
+        for (var index = 0; index < PowerPortAnchors.Length; index++)
+        {
+            var port = (ShipPowerPortId)index;
+            var state = _powerPortStates[index];
+            var anchor = PowerPortAnchors[index];
+            var side = index == 0 ? -1.0f : 1.0f;
+            var operational = IsAttached && state.IsEnabled;
+            var active = operational && state.IsConnected;
+            var cyan = active
+                ? new Color(0.13f, 0.83f, 1.0f, 0.88f + (0.12f * state.OutputRatio))
+                : operational
+                    ? new Color(0.10f, 0.54f, 0.68f, 0.68f)
+                    : new Color(0.16f, 0.29f, 0.33f, 0.55f);
+
+            // Armoured bracket, recessed connector and two tiny status bars.
+            var bracketCenter = anchor - new Vector2(side * 8, 0);
+            DrawSetTransform(bracketCenter, 0, Vector2.One);
+            DrawColoredPolygon(
+            [
+                new Vector2(-14, -12),
+                new Vector2(9, -12),
+                new Vector2(14, -7),
+                new Vector2(14, 7),
+                new Vector2(9, 12),
+                new Vector2(-14, 12),
+            ], new Color(0.035f, 0.055f, 0.063f, 0.98f));
+            DrawPolyline(
+            [
+                new Vector2(-14, -12),
+                new Vector2(9, -12),
+                new Vector2(14, -7),
+                new Vector2(14, 7),
+                new Vector2(9, 12),
+                new Vector2(-14, 12),
+                new Vector2(-14, -12),
+            ], new Color(0.38f, 0.48f, 0.52f, 0.92f), 2, true);
+            DrawRect(new Rect2(-5, -8, 13, 16), new Color(0.008f, 0.018f, 0.024f, 1), true);
+            DrawRect(new Rect2(-3, -6, 9, 12), new Color(cyan, active ? 0.34f : 0.14f), true);
+            DrawCircle(new Vector2(10, -6), 1.8f, cyan);
+            DrawCircle(new Vector2(10, 6), 1.8f, cyan.Darkened(0.2f));
+            DrawLine(new Vector2(-10, -7), new Vector2(-10, 7), new Color(0.56f, 0.63f, 0.65f, 0.7f), 1.4f, true);
+
+            // Labels remain readable at gameplay zoom while staying subordinate
+            // to the socket silhouette.
+            DrawString(
+                ThemeDB.FallbackFont,
+                new Vector2(-10, 4),
+                port.ToString(),
+                HorizontalAlignment.Center,
+                9,
+                9,
+                new Color(0.77f, 0.87f, 0.89f, 0.92f));
+            DrawSetTransform(Vector2.Zero, 0, Vector2.One);
+        }
+    }
+
+    private static int GetPowerPortIndex(ShipPowerPortId port)
+    {
+        var index = (int)port;
+        if (index < 0 || index >= PowerPortAnchors.Length)
+        {
+            throw new ArgumentOutOfRangeException(nameof(port), port, null);
+        }
+
+        return index;
     }
 
     private bool ReadBoostInput()

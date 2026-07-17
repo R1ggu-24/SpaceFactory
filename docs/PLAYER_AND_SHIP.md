@@ -17,7 +17,9 @@ Der Cockpit-Interaktionsradius bleibt bewusst bei 70 und wird nicht mit 1,8 mult
 
 ## Flug und Boost
 
-Das normale Zieltempo beträgt 650 Welteinheiten pro Sekunde. Die Aktion `ship_boost` liegt standardmäßig auf `Shift` und verwendet den zentralen Multiplikator `2.0`, also ein Boost-Zieltempo von 1300. Beschleunigung und Rücknahme werden kurz interpoliert, Positionssprünge vermieden und die Bewegung bleibt in Godots kontinuierlicher `CharacterBody2D`-Kollisionsprüfung.
+Die Zielgeschwindigkeiten liegen zentral in `ShipFlightConfiguration`: Das normale Tempo wurde von `650` um exakt 50 Prozent auf `975` Welteinheiten pro Sekunde erhöht. Das Boost-Tempo wurde gegenüber den bisherigen `1300` exakt verdoppelt und beträgt nun `2600`. Daraus folgt relativ zum neuen Normaltempo ein Multiplikator von `2600 / 975` beziehungsweise rund `2,667`. Beschleunigung und Bremsung wurden im gleichen Verhältnis angepasst (`2025/2625` normal, `6500/8400` im Boost), damit die Zeit bis zum neuen Zieltempo nicht träger wird. Die Aktion `ship_boost` liegt standardmäßig auf `Shift`; Positionssprünge werden vermieden und die Bewegung bleibt in Godots kontinuierlicher `CharacterBody2D`-Kollisionsprüfung.
+
+Der höhere Zielwert ändert weder die Kollisionssemantik noch den zeitbasierten Treibstoffverbrauch: Nur ein tatsächlich bewegter, aktiver Boost verbraucht weiterhin eine Einheit pro Sekunde.
 
 Pause, Fokusverlust und ein Wechsel aus der Schiffsteuerung entwaffnen den Boost bis zum Loslassen der Taste. Die zwei Antriebsflammen sitzen an den skalierten Düsenpositionen, werden im Normalflug sichtbar verlängert und gehen im Boost weich in eine längere, hellere Variante über.
 

@@ -283,9 +283,13 @@ public partial class MachinePlacementPreview : Node2D
             return;
         }
 
+        // Split the configured clearance evenly between both occupied footprints.
+        // Previously each side received the full clearance, effectively doubling the
+        // intended gap and rejecting visibly separated machines.
+        var halfClearance = MachineClearance * 0.5f;
         var paddedFootprint = MachinePlacementGeometry.CreateRectangleCorners(
                 _snappedLocalPosition,
-                _presentation.Footprint + new Vector2(MachineClearance * 2, MachineClearance * 2),
+                _presentation.Footprint + new Vector2(MachineClearance, MachineClearance),
                 _relativeRotation)
             .Select(containingComet.ToGlobal)
             .ToArray();
@@ -296,7 +300,7 @@ public partial class MachinePlacementPreview : Node2D
                 continue;
             }
 
-            var existingFootprint = machine.GetWorldFootprint(MachineClearance);
+            var existingFootprint = machine.GetWorldFootprint(halfClearance);
             if (MachinePlacementGeometry.ConvexPolygonsOverlap(paddedFootprint, existingFootprint))
             {
                 CurrentFailure = MachinePlacementFailureReason.MachineBlocked;
@@ -397,7 +401,7 @@ public partial class MachinePlacementPreview : Node2D
         MachinePlacementFailureReason.FreeSpace => "Nur auf grossen Kometen baubar",
         MachinePlacementFailureReason.CometTooSmall => "Komet zu klein",
         MachinePlacementFailureReason.SurfaceUnavailable => "Oberfläche ungeeignet",
-        MachinePlacementFailureReason.OutsideBuildableArea => "Nicht genügend Platz",
+        MachinePlacementFailureReason.OutsideBuildableArea => "Zu nah am Rand der sicheren Baufläche",
         MachinePlacementFailureReason.SurfaceUneven => "Krater oder unebene Fläche",
         MachinePlacementFailureReason.MachineBlocked => "Maschine blockiert",
         MachinePlacementFailureReason.MaterialsMissing => "Materialien fehlen",

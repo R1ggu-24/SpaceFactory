@@ -1,4 +1,5 @@
 using SpaceFactory.Core.Research;
+using SpaceFactory.Core.Power;
 
 namespace SpaceFactory.Core.Production;
 
@@ -135,6 +136,16 @@ public static class DefaultMachineCatalog
             6,
             2,
             1.8);
+        yield return new MachineDefinition(
+            MachineDefinitionIds.PowerPole,
+            "Strommast",
+            "Verbindet bis zu sechs Stromkabel zu einem gemeinsamen lokalen Netz.",
+            MachineCategory.Energy,
+            MachineKind.Infrastructure,
+            PowerGridConfiguration.PowerPoleBuildCosts,
+            1,
+            1,
+            PowerGridConfiguration.PowerPoleConstructionDurationSeconds);
     }
 
     private static MachineDefinition Production(

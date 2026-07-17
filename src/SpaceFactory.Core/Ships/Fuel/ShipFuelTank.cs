@@ -1,3 +1,5 @@
+using SpaceFactory.Core.Power;
+
 namespace SpaceFactory.Core.Ships.Fuel;
 
 public sealed class ShipFuelTank
@@ -64,6 +66,30 @@ public sealed class ShipFuelTank
         return BoostFuelConsumptionResult.Success(requestedFuel);
     }
 
+    public ShipPowerFuelConsumptionResult ConsumePowerGenerationFuel(
+        double requestedEnergyKilowattSeconds)
+    {
+        if (!double.IsFinite(requestedEnergyKilowattSeconds) || requestedEnergyKilowattSeconds < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(requestedEnergyKilowattSeconds));
+        }
+
+        if (requestedEnergyKilowattSeconds <= ComparisonTolerance || CurrentFuel <= ComparisonTolerance)
+        {
+            return new ShipPowerFuelConsumptionResult(requestedEnergyKilowattSeconds, 0, 0);
+        }
+
+        var requestedFuel = requestedEnergyKilowattSeconds *
+                            PowerGridConfiguration.ShipFuelPerKilowattSecond;
+        var consumedFuel = Math.Min(CurrentFuel, requestedFuel);
+        CurrentFuel = Math.Max(0, CurrentFuel - consumedFuel);
+        var deliveredEnergy = consumedFuel / PowerGridConfiguration.ShipFuelPerKilowattSecond;
+        return new ShipPowerFuelConsumptionResult(
+            requestedEnergyKilowattSeconds,
+            Math.Min(requestedEnergyKilowattSeconds, deliveredEnergy),
+            consumedFuel);
+    }
+
     public bool TryAddFuel(double amount)
     {
         if (!double.IsFinite(amount) || amount <= 0)
@@ -78,5 +104,15 @@ public sealed class ShipFuelTank
 
         CurrentFuel = Math.Min(Capacity, CurrentFuel + amount);
         return true;
+    }
+
+    public void RestoreFuel(double amount)
+    {
+        if (!double.IsFinite(amount) || amount < 0 || amount > Capacity)
+        {
+            throw new ArgumentOutOfRangeException(nameof(amount));
+        }
+
+        CurrentFuel = amount;
     }
 }

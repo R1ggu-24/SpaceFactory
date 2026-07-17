@@ -1,5 +1,6 @@
 using SpaceFactory.Core.Inventory;
 using SpaceFactory.Core.Items;
+using SpaceFactory.Core.Logistics;
 using SpaceFactory.Core.Production;
 using SpaceFactory.Core.Research;
 using SpaceFactory.Core.Ships.Fuel;
@@ -13,26 +14,97 @@ namespace SpaceFactory.Application.Factory;
 public sealed record FactoryStateData(
     int Version,
     IReadOnlyList<MachineStateSnapshot> Machines,
+    IReadOnlyList<MachineConnectionSnapshot> Connections,
     ResearchStateSnapshot Research,
     bool FirstBasicGeneratorBuilt,
     double ShipFuel,
     IReadOnlyDictionary<string, DateTimeOffset> LastSimulatedUtcByComet,
     IReadOnlyList<InventorySlotState> AstronautInventory,
     IReadOnlyList<InventorySlotState> ShipInventory,
-    string? ActiveResearchStationId)
+    string? ActiveResearchStationId,
+    IReadOnlyList<PowerNetworkControlState> PowerNetworkControls,
+    ShipPowerState ShipPower,
+    ShipDockingStateData ShipDocking)
 {
-    public const int CurrentVersion = 2;
+    public const int CurrentVersion = 4;
 
     public static FactoryStateData CreateDefault() => new(
         CurrentVersion,
+        [],
         [],
         new ResearchState().CreateSnapshot(),
         false,
         ShipFuelConfiguration.TankCapacity,
         new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal),
         [],
+        [
+            new InventorySlotState(
+                0,
+                ProductionItemIds.PowerCable.Value,
+                LogisticsConfiguration.StartingPowerCableCount),
+            new InventorySlotState(
+                1,
+                ProductionItemIds.ConveyorBelt.Value,
+                LogisticsConfiguration.StartingConveyorBeltCount),
+            new InventorySlotState(
+                2,
+                ProductionItemIds.TransportPipe.Value,
+                LogisticsConfiguration.StartingTransportPipeCount),
+        ],
+        null,
         [],
-        null);
+        ShipPowerState.Default,
+        ShipDockingStateData.Detached);
+}
+
+/// <summary>
+/// Persistent protection and switch state for one topology-derived power network.
+/// The 60-second chart history is intentionally transient and is rebuilt after loading.
+/// </summary>
+public sealed record PowerNetworkControlState(
+    string NetworkId,
+    bool IsEnabled,
+    bool BreakerTripped,
+    double OverloadElapsedSeconds);
+
+/// <summary>
+/// Independent switches for the two physical ship power sockets.
+/// </summary>
+public sealed record ShipPowerState(bool ConnectorAEnabled, bool ConnectorBEnabled)
+{
+    public static ShipPowerState Default { get; } = new(true, true);
+}
+
+/// <summary>
+/// Stable ship pose used to restore both docked and freely drifting save games. The comet-local
+/// pose keeps an attached ship exact across chunk reloads; the global pose is the fallback for a
+/// detached ship and while the attached comet is being restored.
+/// </summary>
+public sealed record ShipDockingStateData(
+    bool IsAttached,
+    string? CometId,
+    int SectorX,
+    int SectorY,
+    double RelativePositionX,
+    double RelativePositionY,
+    double RelativeRotationRadians,
+    double LandingLegProgress,
+    double GlobalPositionX,
+    double GlobalPositionY,
+    double GlobalRotationRadians)
+{
+    public static ShipDockingStateData Detached { get; } = new(
+        false,
+        null,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        2500,
+        2500,
+        0);
 }
 
 /// <summary>

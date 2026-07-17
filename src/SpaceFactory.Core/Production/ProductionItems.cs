@@ -12,6 +12,13 @@ public enum ProductionItemCategory
     Container,
 }
 
+public enum ProductionItemPhase
+{
+    Solid,
+    Liquid,
+    Gas,
+}
+
 public enum TransportContainerType
 {
     None,
@@ -45,7 +52,8 @@ public sealed record ProductionItemDefinition(
     ProductionItemCategory Category,
     string IconKey,
     int MaximumStackSize = 200,
-    TransportContainerDefinition? Container = null)
+    TransportContainerDefinition? Container = null,
+    ProductionItemPhase Phase = ProductionItemPhase.Solid)
 {
     public void Validate()
     {
@@ -109,6 +117,9 @@ public static class ProductionItemIds
     public static readonly ItemId MachinePart = new("machine_part");
     public static readonly ItemId ConveyorPart = new("conveyor_part");
     public static readonly ItemId SpaceshipPart = new("spaceship_part");
+    public static readonly ItemId PowerCable = new("power_cable");
+    public static readonly ItemId ConveyorBelt = new("conveyor_belt");
+    public static readonly ItemId TransportPipe = new("transport_pipe");
 
     public static readonly ItemId Water = new("water");
     public static readonly ItemId Hydrogen = new("hydrogen");
@@ -161,8 +172,12 @@ public static class DefaultProductionItemCatalog
 
     private static IEnumerable<ProductionItemDefinition> CreateDefinitions()
     {
-        static ProductionItemDefinition Item(ItemId id, string name, ProductionItemCategory category) =>
-            new(id, name, category, $"production/{id.Value}");
+        static ProductionItemDefinition Item(
+            ItemId id,
+            string name,
+            ProductionItemCategory category,
+            ProductionItemPhase phase = ProductionItemPhase.Solid) =>
+            new(id, name, category, $"production/{id.Value}", Phase: phase);
 
         yield return Item(ProductionItemIds.IronOre, "Eisenerz", ProductionItemCategory.RawMaterial);
         yield return Item(ProductionItemIds.CopperOre, "Kupfererz", ProductionItemCategory.RawMaterial);
@@ -182,10 +197,10 @@ public static class DefaultProductionItemCatalog
         yield return Item(ProductionItemIds.CrushedTitaniumOre, "Zerkleinertes Titanerz", ProductionItemCategory.Intermediate);
         yield return Item(ProductionItemIds.SilicatePowder, "Silikatpulver", ProductionItemCategory.Intermediate);
         yield return Item(ProductionItemIds.ProcessedCarbon, "Verarbeiteter Kohlenstoff", ProductionItemCategory.Intermediate);
-        yield return Item(ProductionItemIds.Water, "Wasser", ProductionItemCategory.Intermediate);
-        yield return Item(ProductionItemIds.Hydrogen, "Wasserstoff", ProductionItemCategory.Intermediate);
-        yield return Item(ProductionItemIds.Oxygen, "Sauerstoff", ProductionItemCategory.Intermediate);
-        yield return Item(ProductionItemIds.Fuel, "Treibstoff", ProductionItemCategory.Intermediate);
+        yield return Item(ProductionItemIds.Water, "Wasser", ProductionItemCategory.Intermediate, ProductionItemPhase.Liquid);
+        yield return Item(ProductionItemIds.Hydrogen, "Wasserstoff", ProductionItemCategory.Intermediate, ProductionItemPhase.Gas);
+        yield return Item(ProductionItemIds.Oxygen, "Sauerstoff", ProductionItemCategory.Intermediate, ProductionItemPhase.Gas);
+        yield return Item(ProductionItemIds.Fuel, "Treibstoff", ProductionItemCategory.Intermediate, ProductionItemPhase.Liquid);
 
         foreach (var (id, name) in new[]
         {
@@ -231,6 +246,9 @@ public static class DefaultProductionItemCatalog
             (ProductionItemIds.MachinePart, "Maschinenteil"),
             (ProductionItemIds.ConveyorPart, "Förderbandteil"),
             (ProductionItemIds.SpaceshipPart, "Raumschiffteil"),
+            (ProductionItemIds.PowerCable, "Stromkabel"),
+            (ProductionItemIds.ConveyorBelt, "Förderband"),
+            (ProductionItemIds.TransportPipe, "Transportrohr"),
         })
         {
             yield return Item(id, name, ProductionItemCategory.Component);

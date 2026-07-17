@@ -154,6 +154,32 @@ public sealed class ShipDockingTests
     }
 
     [Fact]
+    public void RestoreAttached_ReconstructsExactPoseAndLandingLegProgress()
+    {
+        var state = new ShipDockingState();
+
+        state.RestoreAttached("saved-comet", new WorldPosition(12, -34), 1.2, 0.65);
+
+        Assert.True(state.IsAttached);
+        Assert.Equal("saved-comet", state.AttachedCometId);
+        Assert.Equal(new WorldPosition(12, -34), state.RelativeAttachmentPosition);
+        Assert.Equal(1.2, state.AttachmentRotationRadians);
+        Assert.Equal(0.65, state.LandingLegProgress);
+    }
+
+    [Fact]
+    public void RestoreDetached_ClearsAttachmentWithoutLosingAnimationProgress()
+    {
+        var state = AttachedState();
+
+        state.RestoreDetached(0.3);
+
+        Assert.False(state.IsAttached);
+        Assert.Null(state.AttachedCometId);
+        Assert.Equal(0.3, state.LandingLegProgress);
+    }
+
+    [Fact]
     public void PressGate_HeldKeyProducesOnlyOneAction()
     {
         var gate = new ShipDockingPressGate();
