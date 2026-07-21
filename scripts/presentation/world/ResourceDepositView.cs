@@ -19,16 +19,27 @@ public partial class ResourceDepositView : Area2D
     private int _sectorX;
     private int _sectorY;
     private int _visibleDamageCrackCount;
+    private int _completedHarvestCycles;
     private bool _interactionActive = true;
     private CollisionShape2D? _interactionCollision;
     private StaticBody2D? _physicalBody;
     private CollisionShape2D? _physicalCollision;
 
     public string DepositId => _deposit.Id;
-    public string DisplayName => _resource.DisplayName;
-    public double MiningTimeSeconds => _deposit.MiningTimeSeconds;
-    public int YieldAmount => _remainingAmount;
-    public bool IsExhausted => _remainingAmount <= 0;
+    public string DisplayName => _deposit.IsFiniteOreStone
+        ? $"Kleiner Erzstein: {_resource.DisplayName}"
+        : _deposit.IsInfinite
+            ? $"{_resource.DisplayName} ({MiningConfiguration.GetPurityDisplayName(_deposit.Purity)})"
+            : _resource.DisplayName;
+    public double MiningTimeSeconds => _deposit.EffectiveManualMiningTimeSeconds;
+    public int YieldAmount => ResourceExtractionRules.GetManualYield(_deposit, _remainingAmount);
+    public bool IsExhausted => !_deposit.IsInfinite && _remainingAmount <= 0;
+    public bool IsInfinite => _deposit.IsInfinite;
+    public bool IsFiniteOreStone => _deposit.IsFiniteOreStone;
+    public int RemainingHits => _deposit.IsFiniteOreStone ? _remainingAmount : 0;
+    public ResourcePurity Purity => _deposit.Purity;
+    public double ExtractionUnitsPerMinute => _deposit.EffectiveExtractionUnitsPerMinute;
+    public ResourceDepositDefinition Deposit => _deposit;
     public ResourceDefinition Resource => _resource;
 
     /// <summary>
@@ -53,8 +64,8 @@ public partial class ResourceDepositView : Area2D
         _sectorX = sectorX;
         _sectorY = sectorY;
         _remainingAmount = stateStore.GetRemainingAmount(deposit);
-        _color = Color.FromHtml(resource.BaseColorHex);
-        _radius = Mathf.Max(8, (float)deposit.RadiusFactor * cometRadius);
+        _color = ApplyPurityColor(Color.FromHtml(resource.BaseColorHex), deposit.Purity);
+        _radius = Mathf.Max(8, (float)deposit.GetRadiusWorldUnits(cometRadius));
         Position = new Vector2(
             (float)deposit.NormalizedPosition.X * cometRadius,
             (float)deposit.NormalizedPosition.Y * cometRadius);
@@ -197,6 +208,12 @@ public partial class ResourceDepositView : Area2D
 
     public void MarkExhausted()
     {
+        if (_deposit.IsInfinite)
+        {
+            CompleteManualHarvest();
+            return;
+        }
+
         if (IsExhausted)
         {
             return;
@@ -206,6 +223,11 @@ public partial class ResourceDepositView : Area2D
         _interactionActive = false;
         ApplyInteractionState();
         _stateStore.SetRemainingAmount(_deposit, 0, _sectorX, _sectorY);
+        FinishExhaustion();
+    }
+
+    private void FinishExhaustion()
+    {
         Exhausted?.Invoke(_deposit.Id);
         AudioCueRequested?.Invoke($"mining_complete:{_resource.Id.Value}");
         var burst = new MiningParticleBurst(_color, _deposit.VisualSeed ^ 0x5041525449434C45UL)
@@ -217,6 +239,61 @@ public partial class ResourceDepositView : Area2D
         Monitoring = false;
         Monitorable = false;
         QueueFree();
+    }
+
+    public void CompleteManualHarvest()
+    {
+        if (IsExhausted)
+        {
+            return;
+        }
+
+        if (!_deposit.IsInfinite)
+        {
+            if (!_deposit.IsFiniteOreStone)
+            {
+                MarkExhausted();
+                return;
+            }
+
+            _remainingAmount = ResourceExtractionRules.GetRemainingAmountAfterManualHarvest(
+                _deposit,
+                _remainingAmount);
+            _stateStore.SetRemainingAmount(_deposit, _remainingAmount, _sectorX, _sectorY);
+            _completedHarvestCycles++;
+            _visibleDamageCrackCount = 0;
+            if (_remainingAmount <= 0)
+            {
+                _interactionActive = false;
+                ApplyInteractionState();
+                FinishExhaustion();
+                return;
+            }
+
+            EmitHarvestFeedback();
+            QueueRedraw();
+            return;
+        }
+
+        _remainingAmount = ResourceExtractionRules.GetRemainingAmountAfterManualHarvest(
+            _deposit,
+            _remainingAmount);
+        _completedHarvestCycles++;
+        _visibleDamageCrackCount = 0;
+        EmitHarvestFeedback();
+        QueueRedraw();
+    }
+
+    private void EmitHarvestFeedback()
+    {
+        AudioCueRequested?.Invoke($"mining_complete:{_resource.Id.Value}");
+        var burst = new MiningParticleBurst(
+            _color,
+            _deposit.VisualSeed ^ (ulong)_completedHarvestCycles ^ 0x5041525449434C45UL)
+        {
+            GlobalPosition = GlobalPosition,
+        };
+        GetTree().CurrentScene.AddChild(burst);
     }
 
     public override void _Draw()
@@ -261,7 +338,14 @@ public partial class ResourceDepositView : Area2D
 
     private void DrawSurfaceHighlights(RandomNumberGenerator random)
     {
-        for (var index = 0; index < 4; index++)
+        var highlightCount = _deposit.Purity switch
+        {
+            ResourcePurity.Impure => 2,
+            ResourcePurity.Normal => 4,
+            ResourcePurity.Pure => 6,
+            _ => 4,
+        };
+        for (var index = 0; index < highlightCount; index++)
         {
             var center = Vector2.FromAngle(random.RandfRange(0, Mathf.Tau)) *
                 random.RandfRange(_radius * 0.18f, _radius * 0.72f);
@@ -276,6 +360,14 @@ public partial class ResourceDepositView : Area2D
     private static int GetDamageCrackCount(float progress) => progress <= 0
         ? 0
         : 2 + Mathf.RoundToInt(progress * 7);
+
+    private static Color ApplyPurityColor(Color color, ResourcePurity purity) => purity switch
+    {
+        ResourcePurity.Impure => color.Darkened(0.24f).Lerp(new Color(0.30f, 0.29f, 0.27f), 0.20f),
+        ResourcePurity.Normal => color,
+        ResourcePurity.Pure => color.Lightened(0.18f),
+        _ => color,
+    };
 
     private void DrawVeins(RandomNumberGenerator random)
     {

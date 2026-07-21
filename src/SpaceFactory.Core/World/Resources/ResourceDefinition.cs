@@ -20,14 +20,22 @@ public sealed record ResourceDefinition(
     IReadOnlyList<string> Uses,
     IReadOnlyList<AsteroidSize> PossibleCometSizes,
     double MinimumDepositRadiusFactor,
-    double MaximumDepositRadiusFactor)
+    double MaximumDepositRadiusFactor,
+    double SourceRadiusWorldUnits = MiningConfiguration.DefaultSourceRadiusWorldUnits,
+    double BaseExtractionUnitsPerMinute = MiningConfiguration.DefaultExtractionUnitsPerMinute,
+    int ManualYieldPerCycle = MiningConfiguration.DefaultManualYieldPerCycle,
+    bool IsInfiniteSource = true)
 {
     public void Validate()
     {
         if (string.IsNullOrWhiteSpace(DisplayName) || SpawnWeight <= 0 || MiningTimeSeconds <= 0 ||
             MinimumAmount <= 0 || MaximumAmount < MinimumAmount || Hardness <= 0 ||
             MaximumStackSize <= 0 || PossibleCometSizes.Count == 0 ||
-            MinimumDepositRadiusFactor <= 0 || MaximumDepositRadiusFactor < MinimumDepositRadiusFactor)
+            MinimumDepositRadiusFactor <= 0 || MaximumDepositRadiusFactor < MinimumDepositRadiusFactor ||
+            !double.IsFinite(SourceRadiusWorldUnits) || SourceRadiusWorldUnits <= 0 ||
+            SourceRadiusWorldUnits > MiningConfiguration.MaximumSourceRadiusWorldUnits ||
+            !double.IsFinite(BaseExtractionUnitsPerMinute) || BaseExtractionUnitsPerMinute <= 0 ||
+            ManualYieldPerCycle <= 0)
         {
             throw new ArgumentException($"Resource definition '{Id}' is invalid.");
         }

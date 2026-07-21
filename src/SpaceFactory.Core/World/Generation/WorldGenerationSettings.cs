@@ -26,7 +26,7 @@ public sealed record WorldGenerationSettings(
     double StartingSafeCenterX = 2500,
     double StartingSafeCenterY = 2500)
 {
-    public const double MaximumSupportedRadius = 1800;
+    public const double MaximumSupportedRadius = 1800 * WorldGenerationDefaults.LargeCometScaleMultiplier;
 
     public void Validate()
     {
@@ -65,9 +65,9 @@ public sealed record WorldGenerationSettings(
             throw new ArgumentException("Field cells are too small to validate gaps using neighboring cells.");
         }
 
-        if (SectorSize <= (MaximumSupportedRadius * 2) + MinimumCometSpacing)
+        if (SectorSize <= MaximumSupportedRadius)
         {
-            throw new ArgumentException("The sector is too small for cross-sector spacing checks.");
+            throw new ArgumentException("The sector must be wider than the largest supported comet radius.");
         }
     }
 }

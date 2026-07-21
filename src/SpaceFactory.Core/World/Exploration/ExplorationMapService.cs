@@ -42,6 +42,8 @@ public sealed class ExplorationMapService
 
     public string? SelectedTargetCometId { get; private set; }
 
+    public string? SelectedTargetMarkerId { get; private set; }
+
     public IReadOnlyList<ScannedChunkData> ScannedChunks =>
         _chunks.Values.OrderBy(chunk => chunk.DiscoveryOrder).ToArray();
 
@@ -60,6 +62,12 @@ public sealed class ExplorationMapService
     public DiscoveredCometData? SelectedTarget =>
         SelectedTargetCometId is not null && _comets.TryGetValue(SelectedTargetCometId, out var comet) && comet.Exists
             ? comet
+            : null;
+
+    public MapMarkerData? SelectedMarkerTarget =>
+        SelectedTargetMarkerId is not null &&
+        _markers.TryGetValue(SelectedTargetMarkerId, out var marker) && marker.Exists
+            ? marker
             : null;
 
     public ScannedChunkData Scan(GeneratedSectorContent content)
@@ -115,10 +123,13 @@ public sealed class ExplorationMapService
                     new WorldPosition(
                         worldPosition.X + rotatedX,
                         worldPosition.Y + rotatedY),
-                    deposit.RadiusFactor * comet.Radius,
+                    deposit.GetRadiusWorldUnits(comet.Radius),
                     deposit.OriginalAmount,
                     deposit.VisualSeed,
-                    Exists: true);
+                    Exists: true,
+                    deposit.Purity,
+                    deposit.IsInfinite,
+                    deposit.EffectiveExtractionUnitsPerMinute);
                 discoveredResources.Add(mapResource);
                 _resources.Add(mapResource.Id, mapResource);
             }
@@ -334,12 +345,13 @@ public sealed class ExplorationMapService
             return false;
         }
 
-        if (SelectedTargetCometId == cometId)
+        if (SelectedTargetCometId == cometId && SelectedTargetMarkerId is null)
         {
             return true;
         }
 
         SelectedTargetCometId = cometId;
+        SelectedTargetMarkerId = null;
         TargetChanged?.Invoke(cometId);
         Changed?.Invoke();
         return true;
@@ -347,6 +359,57 @@ public sealed class ExplorationMapService
 
     public bool ToggleTarget(string cometId) =>
         SelectTarget(SelectedTargetCometId == cometId ? null : cometId);
+
+    public bool SelectMarkerTarget(string? markerId)
+    {
+        if (markerId is not null &&
+            (!_markers.TryGetValue(markerId, out var marker) || !marker.Exists))
+        {
+            return false;
+        }
+
+        if (SelectedTargetMarkerId == markerId && SelectedTargetCometId is null)
+        {
+            return true;
+        }
+
+        SelectedTargetCometId = null;
+        SelectedTargetMarkerId = markerId;
+        TargetChanged?.Invoke(markerId);
+        Changed?.Invoke();
+        return true;
+    }
+
+    public bool ToggleMarkerTarget(string markerId) =>
+        SelectMarkerTarget(SelectedTargetMarkerId == markerId ? null : markerId);
+
+    /// <summary>
+    /// Ends only the active navigation when the ship enters the configured
+    /// arrival radius. Discovery and marker data remain untouched.
+    /// </summary>
+    public bool TryCompleteNavigation(WorldPosition shipPosition)
+    {
+        var cometTarget = SelectedTarget;
+        var markerTarget = SelectedMarkerTarget;
+        if (cometTarget is null && markerTarget is null)
+        {
+            return false;
+        }
+
+        var targetPosition = cometTarget?.WorldPosition ?? markerTarget!.WorldPosition;
+        var deltaX = shipPosition.X - targetPosition.X;
+        var deltaY = shipPosition.Y - targetPosition.Y;
+        // A comet's navigable destination is its surface, not its unreachable
+        // centre. A custom marker is a point target and therefore has no radius.
+        var reachedDistance = (cometTarget?.Radius ?? 0) +
+                              MapNavigationConfiguration.TargetReachedDistanceWorldUnits;
+        if ((deltaX * deltaX) + (deltaY * deltaY) >= reachedDistance * reachedDistance)
+        {
+            return false;
+        }
+
+        return SelectTarget(null);
+    }
 
     public bool IsWorldPositionDiscovered(WorldPosition position) =>
         _chunks.ContainsKey(ToSectorCoordinate(position));
@@ -396,6 +459,12 @@ public sealed class ExplorationMapService
         }
 
         _markers[markerId] = marker with { Exists = false };
+        if (SelectedTargetMarkerId == markerId)
+        {
+            SelectedTargetMarkerId = null;
+            TargetChanged?.Invoke(null);
+        }
+
         Changed?.Invoke();
         return true;
     }

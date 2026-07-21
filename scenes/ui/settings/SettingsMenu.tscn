@@ -24,16 +24,8 @@ layout_mode = 3
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
-offset_left = 34.0
-offset_top = 28.0
-offset_right = -34.0
-offset_bottom = -28.0
 grow_horizontal = 2
 grow_vertical = 2
-theme_override_constants/margin_left = 18
-theme_override_constants/margin_top = 12
-theme_override_constants/margin_right = 18
-theme_override_constants/margin_bottom = 12
 
 [node name="Frame" type="PanelContainer" parent="SafeArea"]
 layout_mode = 2
@@ -63,6 +55,15 @@ theme_override_constants/shadow_offset_x = 2
 theme_override_constants/shadow_offset_y = 2
 theme_override_font_sizes/font_size = 38
 
+[node name="Info" type="Button" parent="SafeArea/Frame/FrameMargin/Layout/Header"]
+custom_minimum_size = Vector2(42, 42)
+layout_mode = 2
+tooltip_text = "Info und Spielwissen"
+mouse_default_cursor_shape = 2
+text = "[i]"
+theme_override_colors/font_color = Color(0.24, 0.83, 1, 1)
+theme_override_font_sizes/font_size = 22
+
 [node name="Section" type="Label" parent="SafeArea/Frame/FrameMargin/Layout/Header"]
 layout_mode = 2
 text = "HAUPTMENÜ"
@@ -74,15 +75,10 @@ theme_override_font_sizes/font_size = 16
 [node name="HeaderLine" type="HSeparator" parent="SafeArea/Frame/FrameMargin/Layout"]
 layout_mode = 2
 
-[node name="Scroll" type="ScrollContainer" parent="SafeArea/Frame/FrameMargin/Layout"]
+[node name="Content" type="VBoxContainer" parent="SafeArea/Frame/FrameMargin/Layout"]
 custom_minimum_size = Vector2(0, 475)
 layout_mode = 2
 size_flags_vertical = 3
-horizontal_scroll_mode = 0
-
-[node name="Content" type="VBoxContainer" parent="SafeArea/Frame/FrameMargin/Layout/Scroll"]
-layout_mode = 2
-size_flags_horizontal = 3
 theme_override_constants/separation = 10
 
 [node name="FooterLine" type="HSeparator" parent="SafeArea/Frame/FrameMargin/Layout"]
@@ -97,13 +93,6 @@ size_flags_horizontal = 3
 text = "Bereit"
 theme_override_colors/font_color = Color(0.26, 0.8, 0.94, 0.9)
 theme_override_font_sizes/font_size = 14
-
-[node name="Hint" type="Label" parent="SafeArea/Frame/FrameMargin/Layout/Footer"]
-layout_mode = 2
-text = "WASD / PFEILE  Navigation    ENTER  Auswählen    ESC  Zurück"
-horizontal_alignment = 2
-theme_override_colors/font_color = Color(0.55, 0.67, 0.73, 1)
-theme_override_font_sizes/font_size = 13
 
 [node name="ModalShade" type="ColorRect" parent="."]
 visible = false

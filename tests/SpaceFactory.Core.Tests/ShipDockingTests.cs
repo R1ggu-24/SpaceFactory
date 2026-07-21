@@ -154,6 +154,64 @@ public sealed class ShipDockingTests
     }
 
     [Fact]
+    public void RestoreAttached_ReconstructsExactPoseAndLandingLegProgress()
+    {
+        var state = new ShipDockingState();
+
+        state.RestoreAttached("saved-comet", new WorldPosition(12, -34), 1.2, 0.65);
+
+        Assert.True(state.IsAttached);
+        Assert.Equal("saved-comet", state.AttachedCometId);
+        Assert.Equal(new WorldPosition(12, -34), state.RelativeAttachmentPosition);
+        Assert.Equal(1.2, state.AttachmentRotationRadians);
+        Assert.Equal(0.65, state.LandingLegProgress);
+    }
+
+    [Fact]
+    public void RestoreDetached_ClearsAttachmentWithoutLosingAnimationProgress()
+    {
+        var state = AttachedState();
+
+        state.RestoreDetached(0.3);
+
+        Assert.False(state.IsAttached);
+        Assert.Null(state.AttachedCometId);
+        Assert.Equal(0.3, state.LandingLegProgress);
+    }
+
+    [Fact]
+    public void RestoreProjection_RebuildsDistanceAndRotationFromCurrentSurface()
+    {
+        var direction = ShipDockingRestoreRules.ResolveRadialDirection(
+            new WorldPosition(800, -600),
+            persistedRelativeRotationRadians: 0);
+        var projection = ShipDockingRestoreRules.ProjectOntoCurrentSurface(
+            new WorldPosition(1200, -900),
+            direction,
+            centerClearance: 270);
+
+        Assert.Equal(0.8, direction.X, precision: 10);
+        Assert.Equal(-0.6, direction.Y, precision: 10);
+        Assert.Equal(1416, projection.RelativeAttachmentPosition.X, precision: 10);
+        Assert.Equal(-1062, projection.RelativeAttachmentPosition.Y, precision: 10);
+        Assert.Equal(
+            Math.Atan2(-0.6, 0.8) + (Math.PI * 0.5),
+            projection.RelativeAttachmentRotationRadians,
+            precision: 10);
+    }
+
+    [Fact]
+    public void RestoreProjection_ZeroLegacyPositionUsesPersistedOrientation()
+    {
+        var direction = ShipDockingRestoreRules.ResolveRadialDirection(
+            default,
+            persistedRelativeRotationRadians: Math.PI);
+
+        Assert.Equal(0, direction.X, precision: 10);
+        Assert.Equal(1, direction.Y, precision: 10);
+    }
+
+    [Fact]
     public void PressGate_HeldKeyProducesOnlyOneAction()
     {
         var gate = new ShipDockingPressGate();

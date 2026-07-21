@@ -37,6 +37,12 @@ public sealed record InputBinding
 
 public static class InputBindingCodes
 {
+    public const long One = 49;
+    public const long Two = 50;
+    public const long Three = 51;
+    public const long Four = 52;
+    public const long Five = 53;
+    public const long Six = 54;
     public const long A = 65;
     public const long B = 66;
     public const long D = 68;
@@ -57,4 +63,5 @@ public static class InputBindingCodes
     public const long Left = 4_194_319;
     public const long Right = 4_194_321;
     public const long LeftMouseButton = 1;
+    public const long MiddleMouseButton = 3;
 }

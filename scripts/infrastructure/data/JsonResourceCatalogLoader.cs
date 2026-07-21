@@ -60,7 +60,11 @@ public sealed class JsonResourceCatalogLoader
         dto.Uses,
         dto.PossibleCometSizes,
         dto.MinimumDepositRadiusFactor,
-        dto.MaximumDepositRadiusFactor);
+        dto.MaximumDepositRadiusFactor,
+        dto.SourceRadiusWorldUnits,
+        dto.BaseExtractionUnitsPerMinute,
+        dto.ManualYieldPerCycle,
+        dto.IsInfiniteSource);
 
     private sealed class ResourceDefinitionDto
     {
@@ -81,5 +85,10 @@ public sealed class JsonResourceCatalogLoader
         public List<AsteroidSize> PossibleCometSizes { get; init; } = [];
         public double MinimumDepositRadiusFactor { get; init; }
         public double MaximumDepositRadiusFactor { get; init; }
+        public double SourceRadiusWorldUnits { get; init; } = MiningConfiguration.DefaultSourceRadiusWorldUnits;
+        public double BaseExtractionUnitsPerMinute { get; init; } =
+            MiningConfiguration.DefaultExtractionUnitsPerMinute;
+        public int ManualYieldPerCycle { get; init; } = MiningConfiguration.DefaultManualYieldPerCycle;
+        public bool IsInfiniteSource { get; init; } = true;
     }
 }

@@ -18,6 +18,7 @@ public enum ShipDockingBlockReason
     UnsafeExitPosition,
     TooFarFromSurface,
     MovingTooFast,
+    ActivePowerConnections,
 }
 
 public readonly record struct ShipDockingDecision(

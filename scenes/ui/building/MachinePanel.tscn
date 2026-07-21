@@ -1,7 +1,9 @@
-[gd_scene load_steps=3 format=3]
+[gd_scene load_steps=5 format=3]
 
 [ext_resource type="Script" path="res://scripts/presentation/building/MachinePanelController.cs" id="1_controller"]
 [ext_resource type="Script" path="res://scripts/presentation/building/MachineGlyphControl.cs" id="2_glyph"]
+[ext_resource type="PackedScene" path="res://scenes/ui/inventory/InventoryPanel.tscn" id="3_inventory_panel"]
+[ext_resource type="Script" path="res://scripts/presentation/inventory/InventoryWorldDropSurface.cs" id="4_drop_surface"]
 
 [node name="MachinePanel" type="CanvasLayer"]
 layer = 25
@@ -27,6 +29,17 @@ grow_vertical = 2
 mouse_filter = 2
 color = Color(0.001, 0.008, 0.014, 0.76)
 
+[node name="WorldDropSurface" type="ColorRect" parent="Overlay"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 0
+color = Color(0, 0, 0, 0.001)
+script = ExtResource("4_drop_surface")
+
 [node name="SafeArea" type="MarginContainer" parent="Overlay"]
 layout_mode = 1
 anchors_preset = 15
@@ -34,10 +47,11 @@ anchor_right = 1.0
 anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
-theme_override_constants/margin_left = 70
-theme_override_constants/margin_top = 60
-theme_override_constants/margin_right = 70
-theme_override_constants/margin_bottom = 60
+mouse_filter = 1
+theme_override_constants/margin_left = 16
+theme_override_constants/margin_top = 16
+theme_override_constants/margin_right = 16
+theme_override_constants/margin_bottom = 16
 
 [node name="Frame" type="PanelContainer" parent="Overlay/SafeArea"]
 layout_mode = 2
@@ -46,21 +60,21 @@ size_flags_vertical = 3
 
 [node name="FrameMargin" type="MarginContainer" parent="Overlay/SafeArea/Frame"]
 layout_mode = 2
-theme_override_constants/margin_left = 22
-theme_override_constants/margin_top = 18
-theme_override_constants/margin_right = 22
-theme_override_constants/margin_bottom = 17
+theme_override_constants/margin_left = 10
+theme_override_constants/margin_top = 10
+theme_override_constants/margin_right = 10
+theme_override_constants/margin_bottom = 10
 
 [node name="Layout" type="VBoxContainer" parent="Overlay/SafeArea/Frame/FrameMargin"]
 layout_mode = 2
-theme_override_constants/separation = 12
+theme_override_constants/separation = 8
 
 [node name="Header" type="HBoxContainer" parent="Overlay/SafeArea/Frame/FrameMargin/Layout"]
 layout_mode = 2
-theme_override_constants/separation = 13
+theme_override_constants/separation = 10
 
 [node name="Glyph" type="Control" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Header"]
-custom_minimum_size = Vector2(68, 68)
+custom_minimum_size = Vector2(56, 56)
 layout_mode = 2
 mouse_filter = 2
 script = ExtResource("2_glyph")
@@ -71,6 +85,7 @@ size_flags_horizontal = 3
 theme_override_constants/separation = 0
 
 [node name="Eyebrow" type="Label" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Header/Identity"]
+visible = false
 layout_mode = 2
 theme_override_colors/font_color = Color(0.08, 0.72, 0.94, 1)
 theme_override_font_sizes/font_size = 10
@@ -79,11 +94,11 @@ text = "MASCHINENSTEUERUNG  //  LOKALES PRODUKTIONSNETZ"
 [node name="Name" type="Label" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Header/Identity"]
 layout_mode = 2
 theme_override_colors/font_color = Color(0.86, 0.95, 0.98, 1)
-theme_override_font_sizes/font_size = 24
+theme_override_font_sizes/font_size = 21
 text = "MASCHINE"
 
 [node name="StatusBadge" type="Label" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Header"]
-custom_minimum_size = Vector2(180, 0)
+custom_minimum_size = Vector2(142, 0)
 layout_mode = 2
 theme_override_colors/font_color = Color(0.35, 0.94, 0.67, 1)
 theme_override_font_sizes/font_size = 11
@@ -92,7 +107,7 @@ horizontal_alignment = 2
 vertical_alignment = 1
 
 [node name="Close" type="Button" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Header"]
-custom_minimum_size = Vector2(42, 42)
+custom_minimum_size = Vector2(38, 38)
 layout_mode = 2
 focus_mode = 0
 mouse_default_cursor_shape = 2
@@ -102,218 +117,259 @@ text = "×"
 [node name="Rule" type="HSeparator" parent="Overlay/SafeArea/Frame/FrameMargin/Layout"]
 layout_mode = 2
 
-[node name="BodyScroll" type="ScrollContainer" parent="Overlay/SafeArea/Frame/FrameMargin/Layout"]
-layout_mode = 2
-size_flags_vertical = 3
-horizontal_scroll_mode = 0
-vertical_scroll_mode = 1
-
-[node name="Body" type="BoxContainer" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/BodyScroll"]
+[node name="Body" type="BoxContainer" parent="Overlay/SafeArea/Frame/FrameMargin/Layout"]
 layout_mode = 2
 size_flags_horizontal = 3
-theme_override_constants/separation = 18
+size_flags_vertical = 3
+theme_override_constants/separation = 12
 
-[node name="RecipePanel" type="PanelContainer" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/BodyScroll/Body"]
-custom_minimum_size = Vector2(320, 0)
+[node name="PersonalInventory" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Body" instance=ExtResource("3_inventory_panel")]
+visible = false
+layout_mode = 2
+size_flags_horizontal = 0
+size_flags_vertical = 3
+size_flags_stretch_ratio = 1.0
+
+[node name="RecipePanel" type="PanelContainer" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Body"]
+custom_minimum_size = Vector2(280, 0)
 layout_mode = 2
 size_flags_vertical = 3
 
-[node name="Margin" type="MarginContainer" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/BodyScroll/Body/RecipePanel"]
+[node name="Margin" type="MarginContainer" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Body/RecipePanel"]
 layout_mode = 2
-theme_override_constants/margin_left = 16
-theme_override_constants/margin_top = 15
-theme_override_constants/margin_right = 16
-theme_override_constants/margin_bottom = 15
+theme_override_constants/margin_left = 12
+theme_override_constants/margin_top = 11
+theme_override_constants/margin_right = 12
+theme_override_constants/margin_bottom = 11
 
-[node name="Layout" type="VBoxContainer" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/BodyScroll/Body/RecipePanel/Margin"]
+[node name="Layout" type="VBoxContainer" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Body/RecipePanel/Margin"]
 layout_mode = 2
-theme_override_constants/separation = 10
+theme_override_constants/separation = 7
 
-[node name="Title" type="Label" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/BodyScroll/Body/RecipePanel/Margin/Layout"]
+[node name="Title" type="Label" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Body/RecipePanel/Margin/Layout"]
 layout_mode = 2
 theme_override_colors/font_color = Color(0.58, 0.82, 0.9, 1)
 theme_override_font_sizes/font_size = 12
 text = "REZEPTAUSWAHL"
 
-[node name="RecipeSelector" type="OptionButton" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/BodyScroll/Body/RecipePanel/Margin/Layout"]
-custom_minimum_size = Vector2(0, 44)
+[node name="RecipeSelector" type="OptionButton" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Body/RecipePanel/Margin/Layout"]
+custom_minimum_size = Vector2(0, 38)
 layout_mode = 2
 focus_mode = 0
 mouse_default_cursor_shape = 2
 
-[node name="RecipeSummary" type="Label" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/BodyScroll/Body/RecipePanel/Margin/Layout"]
+[node name="RecipeSummary" type="Label" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Body/RecipePanel/Margin/Layout"]
+visible = false
 layout_mode = 2
 size_flags_vertical = 3
 theme_override_colors/font_color = Color(0.49, 0.64, 0.7, 1)
-theme_override_font_sizes/font_size = 12
+theme_override_font_sizes/font_size = 11
 text = "Wähle ein Rezept."
 autowrap_mode = 2
 
-[node name="Hint" type="Label" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/BodyScroll/Body/RecipePanel/Margin/Layout"]
-layout_mode = 2
-theme_override_colors/font_color = Color(0.28, 0.56, 0.65, 1)
-theme_override_font_sizes/font_size = 10
-text = "REZEPT UND SCHALTER BLEIBEN NACH DEM SCHLIESSEN ERHALTEN"
-autowrap_mode = 2
-
-[node name="ProductionPanel" type="PanelContainer" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/BodyScroll/Body"]
+[node name="ProductionPanel" type="PanelContainer" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Body"]
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_vertical = 3
 
-[node name="Margin" type="MarginContainer" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/BodyScroll/Body/ProductionPanel"]
+[node name="Margin" type="MarginContainer" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Body/ProductionPanel"]
 layout_mode = 2
-theme_override_constants/margin_left = 16
-theme_override_constants/margin_top = 15
-theme_override_constants/margin_right = 16
-theme_override_constants/margin_bottom = 15
+theme_override_constants/margin_left = 12
+theme_override_constants/margin_top = 11
+theme_override_constants/margin_right = 12
+theme_override_constants/margin_bottom = 11
 
-[node name="Layout" type="VBoxContainer" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/BodyScroll/Body/ProductionPanel/Margin"]
+[node name="Layout" type="VBoxContainer" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Body/ProductionPanel/Margin"]
 layout_mode = 2
-theme_override_constants/separation = 10
-
-[node name="Flow" type="HBoxContainer" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/BodyScroll/Body/ProductionPanel/Margin/Layout"]
-layout_mode = 2
-size_flags_vertical = 3
-theme_override_constants/separation = 14
-
-[node name="Inputs" type="VBoxContainer" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/BodyScroll/Body/ProductionPanel/Margin/Layout/Flow"]
-layout_mode = 2
-size_flags_horizontal = 3
 theme_override_constants/separation = 7
 
-[node name="Title" type="Label" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/BodyScroll/Body/ProductionPanel/Margin/Layout/Flow/Inputs"]
+[node name="Flow" type="HBoxContainer" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Body/ProductionPanel/Margin/Layout"]
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_constants/separation = 10
+
+[node name="Inputs" type="VBoxContainer" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Body/ProductionPanel/Margin/Layout/Flow"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 5
+
+[node name="Title" type="Label" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Body/ProductionPanel/Margin/Layout/Flow/Inputs"]
 layout_mode = 2
 theme_override_colors/font_color = Color(0.48, 0.72, 0.8, 1)
 theme_override_font_sizes/font_size = 10
-text = "EINGABE"
+text = "EINGABE-SLOTS"
 
-[node name="Rows" type="VBoxContainer" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/BodyScroll/Body/ProductionPanel/Margin/Layout/Flow/Inputs"]
+[node name="Rows" type="GridContainer" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Body/ProductionPanel/Margin/Layout/Flow/Inputs"]
 layout_mode = 2
-theme_override_constants/separation = 6
+size_flags_horizontal = 3
+theme_override_constants/h_separation = 4
+theme_override_constants/v_separation = 4
 
-[node name="Arrow" type="Label" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/BodyScroll/Body/ProductionPanel/Margin/Layout/Flow"]
+[node name="Arrow" type="Label" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Body/ProductionPanel/Margin/Layout/Flow"]
 layout_mode = 2
 theme_override_colors/font_color = Color(0.08, 0.72, 0.94, 1)
-theme_override_font_sizes/font_size = 23
+theme_override_font_sizes/font_size = 20
 text = "→"
 vertical_alignment = 1
 
-[node name="Outputs" type="VBoxContainer" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/BodyScroll/Body/ProductionPanel/Margin/Layout/Flow"]
+[node name="Outputs" type="VBoxContainer" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Body/ProductionPanel/Margin/Layout/Flow"]
 layout_mode = 2
 size_flags_horizontal = 3
-theme_override_constants/separation = 7
+theme_override_constants/separation = 5
 
-[node name="Title" type="Label" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/BodyScroll/Body/ProductionPanel/Margin/Layout/Flow/Outputs"]
+[node name="Title" type="Label" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Body/ProductionPanel/Margin/Layout/Flow/Outputs"]
 layout_mode = 2
 theme_override_colors/font_color = Color(0.48, 0.8, 0.7, 1)
 theme_override_font_sizes/font_size = 10
-text = "AUSGABE"
+text = "ENDPRODUKT-SLOTS"
 
-[node name="Rows" type="VBoxContainer" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/BodyScroll/Body/ProductionPanel/Margin/Layout/Flow/Outputs"]
+[node name="Rows" type="GridContainer" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Body/ProductionPanel/Margin/Layout/Flow/Outputs"]
 layout_mode = 2
-theme_override_constants/separation = 6
+size_flags_horizontal = 3
+theme_override_constants/h_separation = 4
+theme_override_constants/v_separation = 4
 
-[node name="ProgressHeader" type="HBoxContainer" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/BodyScroll/Body/ProductionPanel/Margin/Layout"]
+[node name="GeneratorTank" type="PanelContainer" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Body/ProductionPanel/Margin/Layout"]
+visible = false
 layout_mode = 2
 
-[node name="Title" type="Label" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/BodyScroll/Body/ProductionPanel/Margin/Layout/ProgressHeader"]
+[node name="Margin" type="MarginContainer" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Body/ProductionPanel/Margin/Layout/GeneratorTank"]
+layout_mode = 2
+theme_override_constants/margin_left = 8
+theme_override_constants/margin_top = 6
+theme_override_constants/margin_right = 8
+theme_override_constants/margin_bottom = 6
+
+[node name="Row" type="HBoxContainer" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Body/ProductionPanel/Margin/Layout/GeneratorTank/Margin"]
+layout_mode = 2
+theme_override_constants/separation = 7
+
+[node name="Readout" type="Label" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Body/ProductionPanel/Margin/Layout/GeneratorTank/Margin/Row"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_colors/font_color = Color(0.48, 0.82, 0.9, 1)
+theme_override_font_sizes/font_size = 10
+text = "TANK  0 / 0 s"
+vertical_alignment = 1
+
+[node name="Fill" type="Button" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Body/ProductionPanel/Margin/Layout/GeneratorTank/Margin/Row"]
+custom_minimum_size = Vector2(112, 32)
+layout_mode = 2
+focus_mode = 0
+mouse_default_cursor_shape = 2
+theme_override_font_sizes/font_size = 10
+text = "TANK AUFFÜLLEN"
+
+[node name="Drain" type="Button" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Body/ProductionPanel/Margin/Layout/GeneratorTank/Margin/Row"]
+custom_minimum_size = Vector2(104, 32)
+layout_mode = 2
+focus_mode = 0
+mouse_default_cursor_shape = 2
+theme_override_font_sizes/font_size = 10
+text = "TANK LEEREN"
+
+[node name="ProgressHeader" type="HBoxContainer" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Body/ProductionPanel/Margin/Layout"]
+layout_mode = 2
+
+[node name="Title" type="Label" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Body/ProductionPanel/Margin/Layout/ProgressHeader"]
 layout_mode = 2
 size_flags_horizontal = 3
 theme_override_colors/font_color = Color(0.48, 0.65, 0.71, 1)
 theme_override_font_sizes/font_size = 10
 text = "PRODUKTIONSFORTSCHRITT"
 
-[node name="Value" type="Label" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/BodyScroll/Body/ProductionPanel/Margin/Layout/ProgressHeader"]
+[node name="Value" type="Label" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Body/ProductionPanel/Margin/Layout/ProgressHeader"]
 layout_mode = 2
 theme_override_colors/font_color = Color(0.42, 0.84, 0.96, 1)
 theme_override_font_sizes/font_size = 11
 text = "0%"
 horizontal_alignment = 2
 
-[node name="Progress" type="ProgressBar" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/BodyScroll/Body/ProductionPanel/Margin/Layout"]
-custom_minimum_size = Vector2(0, 24)
+[node name="Progress" type="ProgressBar" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Body/ProductionPanel/Margin/Layout"]
+custom_minimum_size = Vector2(0, 18)
 layout_mode = 2
 mouse_filter = 2
 show_percentage = false
 
-[node name="EnergyTitle" type="Label" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/BodyScroll/Body/ProductionPanel/Margin/Layout"]
+[node name="EnergyTitle" type="Label" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Body/ProductionPanel/Margin/Layout"]
 layout_mode = 2
 theme_override_colors/font_color = Color(0.48, 0.65, 0.71, 1)
 theme_override_font_sizes/font_size = 10
 text = "ENERGIEVERSORGUNG"
 
-[node name="Energy" type="HBoxContainer" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/BodyScroll/Body/ProductionPanel/Margin/Layout"]
+[node name="Energy" type="HBoxContainer" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Body/ProductionPanel/Margin/Layout"]
 layout_mode = 2
-theme_override_constants/separation = 18
+theme_override_constants/separation = 12
 
-[node name="Required" type="VBoxContainer" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/BodyScroll/Body/ProductionPanel/Margin/Layout/Energy"]
+[node name="Required" type="VBoxContainer" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Body/ProductionPanel/Margin/Layout/Energy"]
 layout_mode = 2
 size_flags_horizontal = 3
 
-[node name="Label" type="Label" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/BodyScroll/Body/ProductionPanel/Margin/Layout/Energy/Required"]
+[node name="Label" type="Label" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Body/ProductionPanel/Margin/Layout/Energy/Required"]
 layout_mode = 2
 theme_override_colors/font_color = Color(0.4, 0.55, 0.61, 1)
 theme_override_font_sizes/font_size = 9
 text = "BENÖTIGT"
 
-[node name="Value" type="Label" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/BodyScroll/Body/ProductionPanel/Margin/Layout/Energy/Required"]
+[node name="Value" type="Label" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Body/ProductionPanel/Margin/Layout/Energy/Required"]
 layout_mode = 2
-theme_override_font_sizes/font_size = 14
+theme_override_font_sizes/font_size = 13
 text = "0 kW"
 
-[node name="Available" type="VBoxContainer" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/BodyScroll/Body/ProductionPanel/Margin/Layout/Energy"]
+[node name="Available" type="VBoxContainer" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Body/ProductionPanel/Margin/Layout/Energy"]
 layout_mode = 2
 size_flags_horizontal = 3
 
-[node name="Label" type="Label" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/BodyScroll/Body/ProductionPanel/Margin/Layout/Energy/Available"]
+[node name="Label" type="Label" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Body/ProductionPanel/Margin/Layout/Energy/Available"]
 layout_mode = 2
 theme_override_colors/font_color = Color(0.4, 0.55, 0.61, 1)
 theme_override_font_sizes/font_size = 9
 text = "VERFÜGBAR"
 
-[node name="Value" type="Label" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/BodyScroll/Body/ProductionPanel/Margin/Layout/Energy/Available"]
+[node name="Value" type="Label" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Body/ProductionPanel/Margin/Layout/Energy/Available"]
 layout_mode = 2
-theme_override_font_sizes/font_size = 14
+theme_override_font_sizes/font_size = 13
 text = "0 kW"
 
-[node name="Status" type="VBoxContainer" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/BodyScroll/Body/ProductionPanel/Margin/Layout/Energy"]
+[node name="Status" type="VBoxContainer" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Body/ProductionPanel/Margin/Layout/Energy"]
 layout_mode = 2
 size_flags_horizontal = 3
 
-[node name="Label" type="Label" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/BodyScroll/Body/ProductionPanel/Margin/Layout/Energy/Status"]
+[node name="Label" type="Label" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Body/ProductionPanel/Margin/Layout/Energy/Status"]
 layout_mode = 2
 theme_override_colors/font_color = Color(0.4, 0.55, 0.61, 1)
 theme_override_font_sizes/font_size = 9
 text = "STATUS"
 
-[node name="Value" type="Label" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/BodyScroll/Body/ProductionPanel/Margin/Layout/Energy/Status"]
+[node name="Value" type="Label" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Body/ProductionPanel/Margin/Layout/Energy/Status"]
 layout_mode = 2
 theme_override_colors/font_color = Color(0.35, 0.94, 0.67, 1)
 theme_override_font_sizes/font_size = 12
 text = "VERSORGT"
 
-[node name="StatusDetail" type="Label" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/BodyScroll/Body/ProductionPanel/Margin/Layout"]
+[node name="StatusDetail" type="Label" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Body/ProductionPanel/Margin/Layout"]
+visible = false
 layout_mode = 2
 theme_override_colors/font_color = Color(0.5, 0.73, 0.8, 1)
-theme_override_font_sizes/font_size = 11
+theme_override_font_sizes/font_size = 10
 text = "Maschine ist bereit."
 autowrap_mode = 2
 
 [node name="Footer" type="BoxContainer" parent="Overlay/SafeArea/Frame/FrameMargin/Layout"]
 layout_mode = 2
-theme_override_constants/separation = 12
+theme_override_constants/separation = 8
 
 [node name="Hint" type="Label" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Footer"]
+visible = false
 layout_mode = 2
 size_flags_horizontal = 3
 theme_override_colors/font_color = Color(0.43, 0.57, 0.62, 1)
-theme_override_font_sizes/font_size = 10
+theme_override_font_sizes/font_size = 9
 text = "PRODUKTION LÄUFT IM HINTERGRUND WEITER  ·  ESC SCHLIESSEN"
 vertical_alignment = 1
 
 [node name="LoadInputs" type="Button" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Footer"]
-custom_minimum_size = Vector2(148, 42)
+custom_minimum_size = Vector2(108, 36)
 layout_mode = 2
 size_flags_horizontal = 3
 focus_mode = 0
@@ -321,7 +377,7 @@ mouse_default_cursor_shape = 2
 text = "MATERIAL LADEN"
 
 [node name="ReturnInputs" type="Button" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Footer"]
-custom_minimum_size = Vector2(158, 42)
+custom_minimum_size = Vector2(116, 36)
 layout_mode = 2
 size_flags_horizontal = 3
 focus_mode = 0
@@ -329,7 +385,7 @@ mouse_default_cursor_shape = 2
 text = "EINGABE LEEREN"
 
 [node name="CollectOutputs" type="Button" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Footer"]
-custom_minimum_size = Vector2(158, 42)
+custom_minimum_size = Vector2(120, 36)
 layout_mode = 2
 size_flags_horizontal = 3
 focus_mode = 0
@@ -337,7 +393,7 @@ mouse_default_cursor_shape = 2
 text = "AUSGABE NEHMEN"
 
 [node name="ActiveToggle" type="Button" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Footer"]
-custom_minimum_size = Vector2(240, 42)
+custom_minimum_size = Vector2(178, 36)
 layout_mode = 2
 size_flags_horizontal = 3
 focus_mode = 0

@@ -5,59 +5,73 @@ namespace SpaceFactory.Core.World.Resources;
 
 public sealed class ResourceDepositGenerator
 {
-    private const ulong ResourceSalt = 0x5245534F55524345UL;
+    private const ulong ResourceSaltV2 = 0x5245535F56325F21UL;
 
     public IReadOnlyList<ResourceDepositDefinition> Generate(
         AsteroidDefinition comet,
         IReadOnlyList<ResourceDefinition> resources)
     {
-        if (resources.Count == 0)
-        {
-            return [];
-        }
-
+        ArgumentNullException.ThrowIfNull(comet);
+        ArgumentNullException.ThrowIfNull(resources);
         foreach (var resource in resources)
         {
             resource.Validate();
         }
 
+        if (comet.Radius < MiningConfiguration.MinimumSourceCometRadiusWorldUnits ||
+            comet.Size is AsteroidSize.Tiny or AsteroidSize.Small ||
+            resources.Count == 0)
+        {
+            return [];
+        }
+
         var available = resources
-            .Where(resource => resource.PossibleCometSizes.Contains(comet.Size))
+            .Where(resource => resource.PossibleCometSizes.Contains(comet.Size) &&
+                               IsCompatibleWithGeology(resource, comet.Geology))
             .ToArray();
         if (available.Length == 0)
         {
             return [];
         }
 
-        var random = new ResourceRandom(comet.VisualSeed ^ ResourceSalt);
-        var typeCount = GetResourceTypeCount(comet.Size, random);
-        var selectedResources = SelectResourceTypes(available, comet.Size, typeCount, random);
-        var depositTarget = GetDepositCount(comet.Size, random);
-        return CreateDeposits(comet, selectedResources, depositTarget, random);
+        var random = new ResourceRandom(
+            (comet.SurfaceProfile?.ResourceDistributionSeed ?? comet.VisualSeed) ^ ResourceSaltV2);
+        var targetCount = random.NextInt(
+            MiningConfiguration.MinimumSourcesPerComet,
+            MiningConfiguration.MaximumSourcesPerComet + 1);
+        var selectedResources = SelectResourceTypes(
+            available,
+            comet.Size,
+            comet.Geology,
+            targetCount,
+            random);
+        var outline = AsteroidOutlineGeometry.CreateNormalizedOutline(comet);
+        var deposits = CreateSources(comet, selectedResources, outline, random).ToList();
+        CreateFiniteOreStones(comet, available, deposits.Count, deposits, outline, random);
+        return deposits;
     }
 
     private static IReadOnlyList<ResourceDefinition> SelectResourceTypes(
         IReadOnlyList<ResourceDefinition> available,
         AsteroidSize cometSize,
+        AsteroidGeology geology,
         int count,
         ResourceRandom random)
     {
+        var remaining = available.ToList();
         var selected = new List<ResourceDefinition>(count);
-        var veryCommon = available.Where(resource => resource.Rarity == ResourceRarity.VeryCommon).ToArray();
-        if (veryCommon.Length > 0)
+        while (selected.Count < count && remaining.Count > 0)
         {
-            selected.Add(ChooseWeighted(veryCommon, cometSize, random));
+            var resource = ChooseWeighted(remaining, cometSize, geology, random);
+            selected.Add(resource);
+            remaining.Remove(resource);
         }
 
+        // A catalog may contain fewer compatible resource types than the configured source count.
+        // Reusing a type is valid: these are separate physical sources with independent seeds.
         while (selected.Count < count)
         {
-            var candidates = available.Where(resource => !selected.Contains(resource)).ToArray();
-            if (candidates.Length == 0)
-            {
-                break;
-            }
-
-            selected.Add(ChooseWeighted(candidates, cometSize, random));
+            selected.Add(ChooseWeighted(available, cometSize, geology, random));
         }
 
         return selected;
@@ -66,13 +80,14 @@ public sealed class ResourceDepositGenerator
     private static ResourceDefinition ChooseWeighted(
         IReadOnlyList<ResourceDefinition> resources,
         AsteroidSize cometSize,
+        AsteroidGeology geology,
         ResourceRandom random)
     {
-        var totalWeight = resources.Sum(resource => GetEffectiveWeight(resource, cometSize));
+        var totalWeight = resources.Sum(resource => GetEffectiveWeight(resource, cometSize, geology));
         var roll = random.NextDouble() * totalWeight;
         foreach (var resource in resources)
         {
-            roll -= GetEffectiveWeight(resource, cometSize);
+            roll -= GetEffectiveWeight(resource, cometSize, geology);
             if (roll <= 0)
             {
                 return resource;
@@ -82,131 +97,207 @@ public sealed class ResourceDepositGenerator
         return resources[^1];
     }
 
-    private static double GetEffectiveWeight(ResourceDefinition resource, AsteroidSize cometSize)
+    private static double GetEffectiveWeight(
+        ResourceDefinition resource,
+        AsteroidSize cometSize,
+        AsteroidGeology geology)
     {
         var rarityFactor = (resource.Rarity, cometSize) switch
         {
-            (ResourceRarity.Rare, AsteroidSize.Tiny) => 0.18,
-            (ResourceRarity.VeryRare, AsteroidSize.Tiny) => 0.025,
-            (ResourceRarity.Rare, AsteroidSize.Small) => 0.38,
-            (ResourceRarity.VeryRare, AsteroidSize.Small) => 0.08,
             (ResourceRarity.Uncommon, AsteroidSize.Large or AsteroidSize.Huge) => 1.35,
             (ResourceRarity.Rare, AsteroidSize.Large or AsteroidSize.Huge) => 1.7,
             (ResourceRarity.VeryRare, AsteroidSize.Large or AsteroidSize.Huge) => 1.45,
             _ => 1.0,
         };
-        return resource.SpawnWeight * rarityFactor;
+        var geologyFactor = geology switch
+        {
+            AsteroidGeology.Carbonaceous when resource.Id.Value is "carbon" or "troilite" or "phosphorus" => 2.8,
+            AsteroidGeology.Silicate when resource.Id.Value is "silicate_rock" or "olivine" or "calcite" or "schreibersite" => 3.0,
+            AsteroidGeology.Metallic when resource.Uses.Any(use =>
+                use is "metals" or "alloys" or "precision_alloys" or "hightech" or "catalysts") => 2.4,
+            AsteroidGeology.VolatileRich when resource.Id.Value is "water_ice" or "sulfur" or "halite" or "sylvite" => 3.2,
+            AsteroidGeology.Radiogenic when resource.Id.Value == "uranium_ore" => 55.0,
+            AsteroidGeology.Radiogenic when resource.Rarity == ResourceRarity.VeryRare => 3.5,
+            _ => 1.0,
+        };
+        return resource.SpawnWeight * rarityFactor * geologyFactor;
     }
 
-    private static IReadOnlyList<ResourceDepositDefinition> CreateDeposits(
-        AsteroidDefinition comet,
-        IReadOnlyList<ResourceDefinition> resources,
-        int targetCount,
-        ResourceRandom random)
+    private static bool IsCompatibleWithGeology(
+        ResourceDefinition resource,
+        AsteroidGeology geology)
     {
-        if (resources.Count == 0)
+        if (resource.Id.Value == "uranium_ore")
         {
-            return [];
+            return geology == AsteroidGeology.Radiogenic;
         }
 
-        var deposits = new List<ResourceDepositDefinition>(targetCount);
-        var clusterCenters = resources.ToDictionary(
-            resource => resource.Id,
-            _ => CreateValidPosition(comet, [], 0.08, random));
+        return resource.Rarity != ResourceRarity.VeryRare ||
+               geology is AsteroidGeology.Metallic or AsteroidGeology.Radiogenic;
+    }
 
-        for (var index = 0; index < targetCount; index++)
+    private static IReadOnlyList<ResourceDepositDefinition> CreateSources(
+        AsteroidDefinition comet,
+        IReadOnlyList<ResourceDefinition> resources,
+        IReadOnlyList<WorldPosition> outline,
+        ResourceRandom random)
+    {
+        var sources = new List<ResourceDepositDefinition>(resources.Count);
+        for (var index = 0; index < resources.Count; index++)
         {
-            var resource = resources[index % resources.Count];
-            var radiusFactor = Lerp(
-                resource.MinimumDepositRadiusFactor,
-                resource.MaximumDepositRadiusFactor,
-                random.NextDouble());
-            var position = CreateClusteredPosition(
-                comet,
-                clusterCenters[resource.Id],
-                radiusFactor,
-                deposits,
-                random);
-            var sizeAmountFactor = comet.Size switch
+            var resource = resources[index];
+            var radiusWorldUnits = resource.SourceRadiusWorldUnits;
+            var radiusFactor = radiusWorldUnits / comet.Radius;
+            if (!TryCreateValidPosition(
+                    comet,
+                    radiusFactor,
+                    sources,
+                    outline,
+                    random,
+                    out var position))
             {
-                AsteroidSize.Tiny => 0.65,
-                AsteroidSize.Small => 0.85,
-                AsteroidSize.Medium => 1.0,
-                AsteroidSize.Large => 1.4,
-                AsteroidSize.Huge => 1.8,
-                _ => 1.0,
-            };
-            var amount = (int)Math.Round(Lerp(resource.MinimumAmount, resource.MaximumAmount, random.NextDouble()) *
-                sizeAmountFactor);
-
-            deposits.Add(new ResourceDepositDefinition(
-                $"{comet.Id}:deposit:{index}",
+                // Fixed-size sources can make the requested third source physically impossible
+                // on a particularly narrow medium outline. Keeping the already valid one or two
+                // sources preserves the configured 1..3 contract without shrinking or overlap.
+                break;
+            }
+            var purity = ChoosePurity(random);
+            sources.Add(new ResourceDepositDefinition(
+                $"{comet.Id}:source:v2:{index}",
                 comet.Id,
                 resource.Id,
                 position,
                 radiusFactor,
-                Math.Max(1, amount),
+                resource.ManualYieldPerCycle,
                 resource.MiningTimeSeconds,
-                random.Next()));
+                random.Next(),
+                purity,
+                radiusWorldUnits,
+                resource.BaseExtractionUnitsPerMinute,
+                resource.ManualYieldPerCycle,
+                IsInfinite: true,
+                Kind: ResourceDepositKind.InfiniteSource));
         }
 
-        return deposits;
+        return sources;
     }
 
-    private static WorldPosition CreateClusteredPosition(
+    private static void CreateFiniteOreStones(
         AsteroidDefinition comet,
-        WorldPosition clusterCenter,
-        double radiusFactor,
-        IReadOnlyList<ResourceDepositDefinition> existing,
+        IReadOnlyList<ResourceDefinition> availableResources,
+        int normalSourceCount,
+        List<ResourceDepositDefinition> deposits,
+        IReadOnlyList<WorldPosition> outline,
         ResourceRandom random)
     {
-        for (var attempt = 0; attempt < 32; attempt++)
+        var stoneIndex = 0;
+        for (var sourceIndex = 0; sourceIndex < normalSourceCount; sourceIndex++)
         {
-            var useCluster = random.NextDouble() < 0.72;
-            var candidate = useCluster
-                ? new WorldPosition(
-                    clusterCenter.X + (random.NextSignedDouble() * 0.16),
-                    clusterCenter.Y + (random.NextSignedDouble() * 0.16))
-                : CreateValidPosition(comet, existing, radiusFactor, random);
-            if (IsValidPosition(comet, candidate, radiusFactor, existing))
+            if (random.NextDouble() >= MiningConfiguration.FiniteOreStoneSpawnChancePerSource)
             {
-                return candidate;
+                continue;
             }
-        }
 
-        return CreateValidPosition(comet, existing, radiusFactor, random);
+            var resource = ChooseWeighted(availableResources, comet.Size, comet.Geology, random);
+            var radiusWorldUnits = MiningConfiguration.FiniteOreStoneRadiusWorldUnits;
+            var radiusFactor = radiusWorldUnits / comet.Radius;
+            if (!TryCreateValidPosition(
+                    comet,
+                    radiusFactor,
+                    deposits,
+                    outline,
+                    random,
+                    out var position))
+            {
+                // Finite stones are optional discoveries. Never compromise the guaranteed
+                // infinite sources or overlap another object merely to satisfy a chance roll.
+                continue;
+            }
+            var hitCount = random.NextInt(
+                MiningConfiguration.MinimumFiniteOreStoneHits,
+                MiningConfiguration.MaximumFiniteOreStoneHits + 1);
+            deposits.Add(new ResourceDepositDefinition(
+                $"{comet.Id}:ore-stone:v1:{stoneIndex}",
+                comet.Id,
+                resource.Id,
+                position,
+                radiusFactor,
+                hitCount,
+                resource.MiningTimeSeconds * MiningConfiguration.FiniteOreStoneMiningTimeMultiplier,
+                random.Next(),
+                ResourcePurity.Normal,
+                radiusWorldUnits,
+                BaseExtractionUnitsPerMinute: 0,
+                ManualYieldPerCycle: 0,
+                IsInfinite: false,
+                Kind: ResourceDepositKind.FiniteOreStone));
+            stoneIndex++;
+        }
     }
 
-    private static WorldPosition CreateValidPosition(
+    private static bool TryCreateValidPosition(
         AsteroidDefinition comet,
-        IReadOnlyList<ResourceDepositDefinition> existing,
         double radiusFactor,
-        ResourceRandom random)
+        IReadOnlyList<ResourceDepositDefinition> existing,
+        IReadOnlyList<WorldPosition> outline,
+        ResourceRandom random,
+        out WorldPosition position)
     {
-        for (var attempt = 0; attempt < 64; attempt++)
+        // Landable comets keep their construction clearing. Medium source-bearing rocks do not
+        // need that reserved centre; allowing central candidates prevents an unlucky organic,
+        // narrow outline from making the guaranteed third fixed-size source impossible.
+        var minimumDistance = comet.SupportsLanding ? 0.27 : 0.0;
+        var maximumDistance = 0.72 - radiusFactor;
+        if (maximumDistance <= minimumDistance)
+        {
+            position = default;
+            return false;
+        }
+
+        for (var attempt = 0; attempt < 256; attempt++)
         {
             var angle = random.NextDouble() * Math.PI * 2;
-            var minimumDistance = comet.SupportsLanding ? 0.27 : 0.06;
-            var distance = Lerp(minimumDistance, 0.64, Math.Sqrt(random.NextDouble()));
+            var distance = Lerp(minimumDistance, maximumDistance, Math.Sqrt(random.NextDouble()));
             var candidate = new WorldPosition(Math.Cos(angle) * distance, Math.Sin(angle) * distance);
-            if (IsValidPosition(comet, candidate, radiusFactor, existing))
+            if (IsValidPosition(comet, candidate, radiusFactor, existing, outline))
             {
-                return candidate;
+                position = candidate;
+                return true;
             }
         }
 
-        var fallbackAngle = random.NextDouble() * Math.PI * 2;
-        return new WorldPosition(Math.Cos(fallbackAngle) * 0.58, Math.Sin(fallbackAngle) * 0.58);
+        // Deterministic lattice fallback makes the configured 1-3 guarantee independent of
+        // unlucky rejection-sampling sequences.
+        for (var ringIndex = 0; ringIndex < 6; ringIndex++)
+        {
+            var ringFactor = (ringIndex + 0.5) / 6.0;
+            var distance = Lerp(minimumDistance, maximumDistance, ringFactor);
+            for (var angleIndex = 0; angleIndex < 96; angleIndex++)
+            {
+                var angle = (Math.PI * 2 * angleIndex / 96.0) + (random.NextDouble() * 0.01);
+                var candidate = new WorldPosition(Math.Cos(angle) * distance, Math.Sin(angle) * distance);
+                if (IsValidPosition(comet, candidate, radiusFactor, existing, outline))
+                {
+                    position = candidate;
+                    return true;
+                }
+            }
+        }
+
+        position = default;
+        return false;
     }
 
     private static bool IsValidPosition(
         AsteroidDefinition comet,
         WorldPosition position,
         double radiusFactor,
-        IReadOnlyList<ResourceDepositDefinition> existing)
+        IReadOnlyList<ResourceDepositDefinition> existing,
+        IReadOnlyList<WorldPosition> outline)
     {
         var distanceFromCenter = Math.Sqrt((position.X * position.X) + (position.Y * position.Y));
-        if (distanceFromCenter + radiusFactor > 0.72)
+        if (distanceFromCenter + radiusFactor > 0.72 ||
+            !AsteroidOutlineGeometry.ContainsNormalizedCircle(outline, position, radiusFactor))
         {
             return false;
         }
@@ -216,36 +307,31 @@ public sealed class ResourceDepositGenerator
             return false;
         }
 
-        return existing.All(deposit =>
+        var normalizedClearance = MiningConfiguration.SourceClearanceWorldUnits / comet.Radius;
+        return existing.All(source =>
         {
-            var deltaX = position.X - deposit.NormalizedPosition.X;
-            var deltaY = position.Y - deposit.NormalizedPosition.Y;
-            var minimumDistance = radiusFactor + deposit.RadiusFactor + 0.025;
-            return (deltaX * deltaX) + (deltaY * deltaY) >= minimumDistance * minimumDistance;
+            var deltaX = position.X - source.NormalizedPosition.X;
+            var deltaY = position.Y - source.NormalizedPosition.Y;
+            var minimumSeparation = radiusFactor + source.RadiusFactor + normalizedClearance;
+            return (deltaX * deltaX) + (deltaY * deltaY) >= minimumSeparation * minimumSeparation;
         });
     }
 
-    private static int GetResourceTypeCount(AsteroidSize size, ResourceRandom random) => size switch
+    private static ResourcePurity ChoosePurity(ResourceRandom random)
     {
-        AsteroidSize.Tiny => random.NextDouble() < 0.15 ? 2 : 1,
-        AsteroidSize.Small => random.NextInt(1, 3),
-        AsteroidSize.Medium => random.NextInt(2, 5),
-        AsteroidSize.Large => random.NextInt(3, 7),
-        AsteroidSize.Huge => random.NextInt(5, 9),
-        _ => 1,
-    };
+        var roll = random.NextDouble();
+        if (roll < MiningConfiguration.ImpureChance)
+        {
+            return ResourcePurity.Impure;
+        }
 
-    private static int GetDepositCount(AsteroidSize size, ResourceRandom random) => size switch
-    {
-        AsteroidSize.Tiny => random.NextInt(1, 3),
-        AsteroidSize.Small => random.NextInt(2, 5),
-        AsteroidSize.Medium => random.NextInt(5, 9),
-        AsteroidSize.Large => random.NextInt(9, 16),
-        AsteroidSize.Huge => random.NextInt(15, 25),
-        _ => 1,
-    };
+        return roll < MiningConfiguration.ImpureChance + MiningConfiguration.NormalChance
+            ? ResourcePurity.Normal
+            : ResourcePurity.Pure;
+    }
 
-    private static double Lerp(double first, double second, double amount) => first + ((second - first) * amount);
+    private static double Lerp(double first, double second, double amount) =>
+        first + ((second - first) * amount);
 
     private sealed class ResourceRandom(ulong state)
     {
@@ -253,9 +339,8 @@ public sealed class ResourceDepositGenerator
 
         public double NextDouble() => (Next() >> 11) * (1.0 / (1UL << 53));
 
-        public double NextSignedDouble() => (NextDouble() * 2) - 1;
-
-        public int NextInt(int minimum, int maximum) => minimum + (int)(Next() % (uint)(maximum - minimum));
+        public int NextInt(int minimum, int maximum) =>
+            minimum + (int)(Next() % (uint)(maximum - minimum));
 
         public ulong Next()
         {

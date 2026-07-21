@@ -129,6 +129,56 @@ public sealed class PowerAndResearchTests
     }
 
     [Fact]
+    public void FuelGenerator_StopsImmediatelyWhenOutputFillsDuringActiveFuelCycle()
+    {
+        var network = new LocalCometPowerNetwork("comet-a");
+        var generator = BuiltGenerator(MachineDefinitionIds.NuclearReactor, "reactor");
+        generator.InputInventory.Add(ProductionItemIds.NuclearFuelCell, 1);
+        var crusher = ReadyCrusher("crusher");
+        network.AddMachine(generator);
+        network.AddMachine(crusher);
+
+        network.Tick(1, DefaultRecipeCatalog.Instance);
+        var fuelSecondsBeforeBlock = generator.GeneratorFuelSecondsRemaining;
+        generator.OutputInventory.Add(ProductionItemIds.SpentFuelCell, 199);
+        generator.OutputInventory.Add(ProductionItemIds.Carbon, 200);
+        generator.OutputInventory.Add(ProductionItemIds.WaterIce, 200);
+        generator.OutputInventory.Add(ProductionItemIds.IronOre, 200);
+
+        var blocked = network.Tick(1, DefaultRecipeCatalog.Instance);
+
+        Assert.Equal(0, blocked.ConsumedEnergyKilowattSeconds);
+        Assert.Equal(0, (blocked.SourceAllocations ?? []).Sum(source => source.SuppliedKilowatts));
+        Assert.Equal(fuelSecondsBeforeBlock, generator.GeneratorFuelSecondsRemaining);
+        Assert.Equal(MachineOperationStatus.OutputFull, generator.Status);
+        Assert.Equal(MachineOperationStatus.WaitingForEnergy, crusher.Status);
+    }
+
+    [Fact]
+    public void NuclearReactor_UsesOnlyItsReservedTailSlotForSpentFuel()
+    {
+        var reactor = BuiltGenerator(MachineDefinitionIds.NuclearReactor, "reactor-waste-slot");
+        Assert.True(reactor.InputInventory.Add(ProductionItemIds.NuclearFuelCell, 2).Succeeded);
+        Assert.True(reactor.OutputInventory.AddToSlot(
+            reactor.OutputInventory.SlotCount - 1,
+            ProductionItemIds.SpentFuelCell,
+            199).Succeeded);
+
+        var available = reactor.GetAvailableGenerationKilowatts(
+            ProductionConfiguration.NuclearFuelCellSeconds * 2);
+
+        Assert.Equal(ProductionConfiguration.NuclearReactorPowerKilowatts * 0.5, available, 6);
+        reactor.ConsumeGeneratedEnergy(
+            ProductionConfiguration.NuclearReactorPowerKilowatts *
+            ProductionConfiguration.NuclearFuelCellSeconds);
+        Assert.Equal(200, reactor.OutputInventory.GetSlot(reactor.OutputInventory.SlotCount - 1).Amount);
+        Assert.All(reactor.OutputInventory.Slots.Take(reactor.OutputInventory.SlotCount - 1),
+            slot => Assert.True(slot.IsEmpty));
+        Assert.Equal(1, reactor.InputInventory.GetAmount(ProductionItemIds.NuclearFuelCell));
+        Assert.Equal(0, reactor.GetAvailableGenerationKilowatts(1));
+    }
+
+    [Fact]
     public void PowerNetwork_RejectsMachinePlacedOnAnotherComet()
     {
         var network = new LocalCometPowerNetwork("comet-a");
@@ -166,7 +216,7 @@ public sealed class PowerAndResearchTests
         var definition = DefaultResearchCatalog.Instance.Get(DefaultResearchIds.AdvancedMetallurgy);
         var inventory = new SpaceFactory.Core.Inventory.SlotInventory(4);
         inventory.Add(ProductionItemIds.IronIngot, 20);
-        var state = new ResearchState();
+        var state = new ResearchState([DefaultResearchIds.BasicAutomation]);
 
         var result = state.TryStart(definition, inventory);
 
@@ -197,7 +247,7 @@ public sealed class PowerAndResearchTests
     {
         var definition = DefaultResearchCatalog.Instance.Get(DefaultResearchIds.AdvancedMetallurgy);
         var inventory = ResearchInventory(definition);
-        var state = new ResearchState();
+        var state = new ResearchState([DefaultResearchIds.BasicAutomation]);
         state.TryStart(definition, inventory);
 
         var waiting = state.Tick(definition, 10, definition.RequiredPowerKilowatts - 1);

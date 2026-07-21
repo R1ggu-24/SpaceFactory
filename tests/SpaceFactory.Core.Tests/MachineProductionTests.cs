@@ -197,6 +197,38 @@ public sealed class MachineProductionTests
         Assert.Equal(2, restored.OutputInventory.GetAmount(ProductionItemIds.IronPlate));
     }
 
+    [Fact]
+    public void WorkbenchInventory_EnforcesToolStackLimitAndSplitsLegacySnapshots()
+    {
+        var definition = DefaultMachineCatalog.Instance.Get(MachineDefinitionIds.Workbench);
+        var machine = new MachineState(
+            new MachineInstanceId("workbench-tool-stack"),
+            definition,
+            constructionCompleted: true);
+
+        Assert.Equal(1, machine.OutputInventory.GetMaximumStackSize(
+            ProductionItemIds.MachineDismantlingTool));
+        Assert.True(machine.OutputInventory.Add(ProductionItemIds.MachineDismantlingTool, 2).Succeeded);
+        Assert.Equal(2, machine.OutputInventory.UsedSlotCount);
+        Assert.All(machine.OutputInventory.Slots.Where(slot => !slot.IsEmpty), slot => Assert.Equal(1, slot.Amount));
+
+        var legacySnapshot = machine.CreateSnapshot() with
+        {
+            OutputSlots =
+            [
+                new MachineInventorySlotSnapshot(
+                    0,
+                    ProductionItemIds.MachineDismantlingTool,
+                    2),
+            ],
+        };
+        var restored = MachineState.Restore(legacySnapshot, definition);
+
+        Assert.Equal(2, restored.OutputInventory.GetAmount(ProductionItemIds.MachineDismantlingTool));
+        Assert.Equal(2, restored.OutputInventory.UsedSlotCount);
+        Assert.All(restored.OutputInventory.Slots.Where(slot => !slot.IsEmpty), slot => Assert.Equal(1, slot.Amount));
+    }
+
     private static MachineState BuiltMachine(RecipeDefinition recipe, bool enabled = false)
     {
         var machine = new MachineState(

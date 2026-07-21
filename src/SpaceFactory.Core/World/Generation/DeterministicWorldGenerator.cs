@@ -17,10 +17,15 @@ public sealed class DeterministicWorldGenerator : IWorldGenerator
     {
         request.Settings.Validate();
         var candidatesBySector = new Dictionary<SectorCoordinate, IReadOnlyList<CometCandidate>>();
+        var candidateSearchRange = GetCandidateSearchRange(request.Settings);
 
-        for (var y = request.Coordinate.Y - 1; y <= request.Coordinate.Y + 1; y++)
+        for (var y = request.Coordinate.Y - candidateSearchRange;
+             y <= request.Coordinate.Y + candidateSearchRange;
+             y++)
         {
-            for (var x = request.Coordinate.X - 1; x <= request.Coordinate.X + 1; x++)
+            for (var x = request.Coordinate.X - candidateSearchRange;
+                 x <= request.Coordinate.X + candidateSearchRange;
+                 x++)
             {
                 var coordinate = new SectorCoordinate(x, y);
                 candidatesBySector[coordinate] = CreateCandidates(request, coordinate);
@@ -102,6 +107,7 @@ public sealed class DeterministicWorldGenerator : IWorldGenerator
             (coordinate.X * (double)request.Settings.SectorSize) + localPosition.X,
             (coordinate.Y * (double)request.Settings.SectorSize) + localPosition.Y);
         var visualSeed = random.Next();
+        var geology = ChooseGeology(size, visualSeed);
         var priority = CreatePlacementPriority(size, random.Next());
         var resource = random.NextDouble() < 0.68 ? "iron_ore" : "copper_ore";
         var roughness = 0.18 + (random.NextDouble() * 0.52);
@@ -123,7 +129,8 @@ public sealed class DeterministicWorldGenerator : IWorldGenerator
             roughness,
             elevation,
             CreateCraters(craterCount, random),
-            CreateSurfaceProfile(id, coordinate, index, size, radius, roughness, visualSeed));
+            CreateSurfaceProfile(id, coordinate, index, size, radius, roughness, visualSeed),
+            geology);
     }
 
     private static bool HasHighestPriorityAtPosition(
@@ -169,14 +176,32 @@ public sealed class DeterministicWorldGenerator : IWorldGenerator
         candidate.LocalPosition,
         candidate.Radius,
         candidate.Size,
-        $"comet_{candidate.Size.ToString().ToLowerInvariant()}",
+        $"comet_{candidate.Size.ToString().ToLowerInvariant()}_{candidate.Geology.ToString().ToLowerInvariant()}",
         candidate.ResourceType,
         candidate.VisualSeed,
         candidate.RotationRadians,
         candidate.SurfaceRoughness,
         candidate.ElevationVariation,
         candidate.Craters,
-        candidate.SurfaceProfile);
+        candidate.SurfaceProfile,
+        candidate.Geology);
+
+    private static AsteroidGeology ChooseGeology(AsteroidSize size, ulong visualSeed)
+    {
+        var roll = visualSeed % 1000;
+        if (size is AsteroidSize.Large or AsteroidSize.Huge && roll < 24)
+        {
+            return AsteroidGeology.Radiogenic;
+        }
+
+        return roll switch
+        {
+            < 330 => AsteroidGeology.Carbonaceous,
+            < 650 => AsteroidGeology.Silicate,
+            < 870 => AsteroidGeology.Metallic,
+            _ => AsteroidGeology.VolatileRich,
+        };
+    }
 
     private static AsteroidSurfaceProfile? CreateSurfaceProfile(
         string cometId,
@@ -197,7 +222,12 @@ public sealed class DeterministicWorldGenerator : IWorldGenerator
         return new AsteroidSurfaceProfile(
             $"{cometId}:surface",
             radius * (size == AsteroidSize.Huge ? 0.82 : 0.78),
-            radius * (size == AsteroidSize.Huge ? 0.65 : 0.52),
+            // The polygon, crater and terrain checks remain authoritative.  The old
+            // 52/65 percent radii rejected a large part of visibly flat ground before
+            // those precise checks even ran, which made valid-looking placements report
+            // "not enough room".  These broader coarse radii expose the useful surface
+            // while the actual generated outline still prevents edge overhang.
+            radius * (size == AsteroidSize.Huge ? 0.78 : 0.70),
             size == AsteroidSize.Huge ? 4 : 1,
             visualSeed ^ 0x5445525241494EUL,
             visualSeed ^ 0x5245534F55524345UL,
@@ -330,10 +360,16 @@ public sealed class DeterministicWorldGenerator : IWorldGenerator
         AsteroidSize.Tiny => 40 + (factor * 35),
         AsteroidSize.Small => 90 + (factor * 70),
         AsteroidSize.Medium => 190 + (factor * 130),
-        AsteroidSize.Large => 480 + (factor * 200),
-        AsteroidSize.Huge => 1300 + (factor * 500),
+        AsteroidSize.Large => (480 + (factor * 200)) * WorldGenerationDefaults.LargeCometScaleMultiplier,
+        AsteroidSize.Huge => (1300 + (factor * 500)) * WorldGenerationDefaults.LargeCometScaleMultiplier,
         _ => throw new ArgumentOutOfRangeException(nameof(size)),
     };
+
+    private static int GetCandidateSearchRange(WorldGenerationSettings settings) => Math.Max(
+        1,
+        (int)Math.Ceiling(
+            ((WorldGenerationSettings.MaximumSupportedRadius * 2) + settings.MinimumCometSpacing) /
+            settings.SectorSize));
 
     private static int CompareCoordinates(SectorCoordinate first, SectorCoordinate second)
     {
@@ -355,7 +391,8 @@ public sealed class DeterministicWorldGenerator : IWorldGenerator
         double SurfaceRoughness,
         double ElevationVariation,
         IReadOnlyList<AsteroidCrater> Craters,
-        AsteroidSurfaceProfile? SurfaceProfile)
+        AsteroidSurfaceProfile? SurfaceProfile,
+        AsteroidGeology Geology)
     {
         public string Id => $"comet:{Owner.X}:{Owner.Y}:{Index}";
     }

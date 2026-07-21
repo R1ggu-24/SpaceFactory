@@ -1,8 +1,11 @@
-[gd_scene load_steps=4 format=3]
+[gd_scene load_steps=7 format=3]
 
 [ext_resource type="Script" path="res://scripts/presentation/inventory/InventoryMenuController.cs" id="1_controller"]
 [ext_resource type="Script" path="res://scripts/presentation/inventory/InventoryBackdrop.cs" id="2_backdrop"]
 [ext_resource type="PackedScene" path="res://scenes/ui/inventory/InventoryPanel.tscn" id="3_panel"]
+[ext_resource type="Script" path="res://scripts/presentation/inventory/InventoryWorldDropSurface.cs" id="4_drop_surface"]
+[ext_resource type="Script" path="res://scripts/presentation/inventory/InventoryBulkActionButton.cs" id="5_bulk_button"]
+[ext_resource type="Script" path="res://scripts/presentation/inventory/InventoryItemContextMenu.cs" id="6_context_menu"]
 
 [node name="InventoryMenu" type="CanvasLayer"]
 layer = 90
@@ -38,6 +41,7 @@ grow_horizontal = 2
 grow_vertical = 2
 mouse_filter = 0
 color = Color(0, 0, 0, 0.01)
+script = ExtResource("4_drop_surface")
 
 [node name="SafeArea" type="MarginContainer" parent="Overlay"]
 layout_mode = 1
@@ -76,6 +80,7 @@ size_flags_horizontal = 3
 theme_override_constants/separation = 0
 
 [node name="Eyebrow" type="Label" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Header/TitleBlock"]
+visible = false
 layout_mode = 2
 text = "SPACEFACTORY // CARGO INTERFACE"
 theme_override_colors/font_color = Color(0.18, 0.63, 0.78, 0.9)
@@ -83,14 +88,15 @@ theme_override_font_sizes/font_size = 10
 
 [node name="Title" type="Label" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Header/TitleBlock"]
 layout_mode = 2
-text = "INVENTAR"
+text = "ASTRONAUT"
 theme_override_colors/font_color = Color(0.91, 0.98, 1, 1)
 theme_override_colors/font_shadow_color = Color(0, 0.45, 0.68, 0.42)
 theme_override_constants/shadow_offset_x = 1
 theme_override_constants/shadow_offset_y = 2
-theme_override_font_sizes/font_size = 29
+theme_override_font_sizes/font_size = 24
 
 [node name="Meta" type="VBoxContainer" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Header"]
+visible = false
 layout_mode = 2
 size_flags_horizontal = 3
 theme_override_constants/separation = 2
@@ -103,24 +109,14 @@ clip_text = true
 theme_override_colors/font_color = Color(0.2, 0.78, 0.98, 0.95)
 theme_override_font_sizes/font_size = 13
 
-[node name="Selection" type="Label" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Header/Meta"]
-layout_mode = 2
-text = "AUSWAHL  —  KEIN GEGENSTAND"
-horizontal_alignment = 2
-clip_text = true
-text_overrun_behavior = 3
-theme_override_colors/font_color = Color(0.56, 0.69, 0.75, 1)
-theme_override_font_sizes/font_size = 11
-
 [node name="HeaderRule" type="HSeparator" parent="Overlay/SafeArea/Frame/FrameMargin/Layout"]
 layout_mode = 2
 
-[node name="BodyScroll" type="ScrollContainer" parent="Overlay/SafeArea/Frame/FrameMargin/Layout"]
+[node name="BodyScroll" type="MarginContainer" parent="Overlay/SafeArea/Frame/FrameMargin/Layout"]
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_vertical = 3
-horizontal_scroll_mode = 3
-vertical_scroll_mode = 1
+mouse_filter = 2
 
 [node name="InventoryColumns" type="BoxContainer" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/BodyScroll"]
 layout_mode = 2
@@ -128,32 +124,97 @@ size_flags_horizontal = 3
 size_flags_vertical = 3
 theme_override_constants/separation = 14
 
-[node name="AstronautInventory" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/BodyScroll/InventoryColumns" instance=ExtResource("3_panel")]
+[node name="PersonalColumn" type="VBoxContainer" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/BodyScroll/InventoryColumns"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+theme_override_constants/separation = 10
+
+[node name="StorageActions" type="VBoxContainer" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/BodyScroll/InventoryColumns"]
+visible = false
+layout_mode = 2
+size_flags_vertical = 4
+theme_override_constants/separation = 7
+
+[node name="StoreAll" type="Button" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/BodyScroll/InventoryColumns/StorageActions"]
+custom_minimum_size = Vector2(32, 32)
+layout_mode = 2
+mouse_default_cursor_shape = 2
+tooltip_text = "Alles einlagern"
+script = ExtResource("5_bulk_button")
+points_into_storage = true
+
+[node name="TakeAll" type="Button" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/BodyScroll/InventoryColumns/StorageActions"]
+custom_minimum_size = Vector2(32, 32)
+layout_mode = 2
+mouse_default_cursor_shape = 2
+tooltip_text = "Alles nehmen"
+script = ExtResource("5_bulk_button")
+
+[node name="PersonalInventoryRow" type="HBoxContainer" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/BodyScroll/InventoryColumns/PersonalColumn"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+theme_override_constants/separation = 10
+alignment = 1
+
+[node name="AstronautInventory" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/BodyScroll/InventoryColumns/PersonalColumn/PersonalInventoryRow" instance=ExtResource("3_panel")]
+layout_mode = 2
+size_flags_horizontal = 0
+size_flags_vertical = 4
+
+[node name="ToolDivider" type="VSeparator" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/BodyScroll/InventoryColumns/PersonalColumn/PersonalInventoryRow"]
+visible = false
+custom_minimum_size = Vector2(1, 274)
+layout_mode = 2
+size_flags_vertical = 0
+mouse_filter = 2
+
+[node name="ToolInventory" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/BodyScroll/InventoryColumns/PersonalColumn/PersonalInventoryRow" instance=ExtResource("3_panel")]
+visible = false
+layout_mode = 2
+size_flags_horizontal = 0
+size_flags_vertical = 0
+
+[node name="HotbarInventory" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/BodyScroll/InventoryColumns/PersonalColumn" instance=ExtResource("3_panel")]
 layout_mode = 2
 
 [node name="ShipInventory" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/BodyScroll/InventoryColumns" instance=ExtResource("3_panel")]
 layout_mode = 2
 
-[node name="FooterRule" type="HSeparator" parent="Overlay/SafeArea/Frame/FrameMargin/Layout"]
-layout_mode = 2
+[node name="Toast" type="PanelContainer" parent="Overlay"]
+visible = false
+layout_mode = 1
+anchors_preset = 7
+anchor_left = 0.5
+anchor_top = 1.0
+anchor_right = 0.5
+anchor_bottom = 1.0
+offset_left = -190.0
+offset_top = -58.0
+offset_right = 190.0
+offset_bottom = -18.0
+grow_horizontal = 2
+grow_vertical = 0
+mouse_filter = 2
 
-[node name="Footer" type="BoxContainer" parent="Overlay/SafeArea/Frame/FrameMargin/Layout"]
+[node name="Message" type="Label" parent="Overlay/Toast"]
 layout_mode = 2
-theme_override_constants/separation = 16
-
-[node name="Status" type="Label" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Footer"]
-layout_mode = 2
-size_flags_horizontal = 3
-text = "Bereit."
+mouse_filter = 2
+text = ""
+horizontal_alignment = 1
+vertical_alignment = 1
 clip_text = true
 text_overrun_behavior = 3
-theme_override_colors/font_color = Color(0.32, 0.78, 0.91, 0.96)
 theme_override_font_sizes/font_size = 12
 
-[node name="Hint" type="Label" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Footer"]
-layout_mode = 2
-text = "LINKSKLICK + ZIEHEN   TRANSFER    |    I / ESC   SCHLIESSEN"
-horizontal_alignment = 2
-clip_text = true
-theme_override_colors/font_color = Color(0.48, 0.61, 0.67, 1)
-theme_override_font_sizes/font_size = 11
+[node name="ItemContextMenu" type="Control" parent="Overlay"]
+visible = false
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 0
+script = ExtResource("6_context_menu")

@@ -25,6 +25,15 @@ public static class InputActionCatalog
             new(GameAction.OpenMap, "open_map", "Karte öffnen", InputBinding.Key(InputBindingCodes.M)),
             new(GameAction.OpenBuildMenu, "build_menu", "Baumenü öffnen", InputBinding.Key(InputBindingCodes.B)),
             new(GameAction.UseMiningTool, "use_mining_tool", "Abbauwerkzeug verwenden", InputBinding.MouseButton(InputBindingCodes.LeftMouseButton)),
+            new(GameAction.HotbarSlot1, "hotbar_slot_1", "Hotbar-Slot 1", InputBinding.Key(InputBindingCodes.One)),
+            new(GameAction.HotbarSlot2, "hotbar_slot_2", "Hotbar-Slot 2", InputBinding.Key(InputBindingCodes.Two)),
+            new(GameAction.HotbarSlot3, "hotbar_slot_3", "Hotbar-Slot 3", InputBinding.Key(InputBindingCodes.Three)),
+            new(GameAction.HotbarSlot4, "hotbar_slot_4", "Hotbar-Slot 4", InputBinding.Key(InputBindingCodes.Four)),
+            new(GameAction.HotbarSlot5, "hotbar_slot_5", "Hotbar-Slot 5", InputBinding.Key(InputBindingCodes.Five)),
+            new(GameAction.HotbarSlot6, "hotbar_slot_6", "Hotbar-Slot 6", InputBinding.Key(InputBindingCodes.Six)),
+            new(GameAction.ActivateHandSlot, "activate_hand_slot", "Hand-Slot aktivieren", InputBinding.MouseButton(InputBindingCodes.MiddleMouseButton)),
+            new(GameAction.PreviousTool, "previous_tool", "Vorheriges Werkzeug", InputBinding.Key(InputBindingCodes.Up)),
+            new(GameAction.NextTool, "next_tool", "Nächstes Werkzeug", InputBinding.Key(InputBindingCodes.Down)),
             new(GameAction.RotateBuilding, "rotate_building", "Gebäude drehen", InputBinding.Key(InputBindingCodes.R)),
             new(GameAction.CancelAction, "cancel_action", "Aktion abbrechen", InputBinding.Key(InputBindingCodes.X)),
             new(GameAction.OpenPauseMenu, "pause", "Pausemenü öffnen", InputBinding.Key(InputBindingCodes.Escape))
@@ -36,15 +45,19 @@ public static class InputActionCatalog
 
     private static readonly IReadOnlyDictionary<GameAction, IReadOnlyList<InputBinding>> PermanentBindingsByAction =
         new ReadOnlyDictionary<GameAction, IReadOnlyList<InputBinding>>(
-            new Dictionary<GameAction, IReadOnlyList<InputBinding>>
-            {
-                [GameAction.MoveUp] = [InputBinding.Key(InputBindingCodes.Up)],
-                [GameAction.MoveDown] = [InputBinding.Key(InputBindingCodes.Down)],
-                [GameAction.MoveLeft] = [InputBinding.Key(InputBindingCodes.Left)],
-                [GameAction.MoveRight] = [InputBinding.Key(InputBindingCodes.Right)],
-            });
+            new Dictionary<GameAction, IReadOnlyList<InputBinding>>());
 
     public static IReadOnlyList<InputActionDefinition> All => Definitions;
+
+    public static IReadOnlyList<GameAction> HotbarActions { get; } = Array.AsReadOnly(
+    [
+        GameAction.HotbarSlot1,
+        GameAction.HotbarSlot2,
+        GameAction.HotbarSlot3,
+        GameAction.HotbarSlot4,
+        GameAction.HotbarSlot5,
+        GameAction.HotbarSlot6,
+    ]);
 
     public static bool Contains(GameAction action) => DefinitionsByAction.ContainsKey(action);
 

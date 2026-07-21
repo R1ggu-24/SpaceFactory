@@ -1,7 +1,7 @@
 namespace SpaceFactory.Presentation.UI;
 
 /// <summary>
-/// The one mutually exclusive fullscreen interface currently owned by the game root.
+/// The one mutually exclusive primary interface currently owned by the game root.
 /// </summary>
 public enum PrimaryUiMode
 {
@@ -10,5 +10,6 @@ public enum PrimaryUiMode
     Map,
     BuildMenu,
     MachinePanel,
+    PowerMenu,
     PauseMenu,
 }

@@ -664,33 +664,10 @@ public partial class AsteroidView : StaticBody2D
 
     private static Vector2[] CreateOutline(AsteroidDefinition definition)
     {
-        var random = new RandomNumberGenerator { Seed = definition.VisualSeed };
-        var pointCount = random.RandiRange(26, 42);
-        var outline = new Vector2[pointCount];
-        var firstWave = random.RandfRange(2.0f, 4.5f);
-        var secondWave = random.RandfRange(5.0f, 9.0f);
-        var thirdWave = random.RandfRange(10.0f, 15.0f);
-        var firstPhase = random.RandfRange(0, Mathf.Tau);
-        var secondPhase = random.RandfRange(0, Mathf.Tau);
-        var thirdPhase = random.RandfRange(0, Mathf.Tau);
-        var minimumAspect = definition.SupportsLanding ? 0.72f : 0.56f;
-        var minorAspect = random.RandfRange(minimumAspect, 0.96f);
-        var stretchAlongX = random.Randf() > 0.5f;
-        var axisScale = stretchAlongX ? new Vector2(1, minorAspect) : new Vector2(minorAspect, 1);
-
-        for (var index = 0; index < pointCount; index++)
-        {
-            var angle = Mathf.Tau * index / pointCount;
-            var wave = Mathf.Sin((angle * firstWave) + firstPhase) * 0.07f +
-                Mathf.Sin((angle * secondWave) + secondPhase) * 0.038f +
-                Mathf.Sin((angle * thirdWave) + thirdPhase) * 0.018f;
-            var noise = random.RandfRange(-0.028f, 0.028f) *
-                (0.72f + (float)definition.SurfaceRoughness);
-            var radius = (float)definition.Radius * (0.87f + wave + noise);
-            outline[index] = Vector2.FromAngle(angle) * radius * axisScale;
-        }
-
-        return outline;
+        var radius = (float)definition.Radius;
+        return AsteroidOutlineGeometry.CreateNormalizedOutline(definition)
+            .Select(point => new Vector2((float)point.X * radius, (float)point.Y * radius))
+            .ToArray();
     }
 
     private static Vector2[] CreateRockPatch(

@@ -4,6 +4,7 @@ public enum InventoryFailure
 {
     None,
     InvalidAmount,
+    ItemNotAccepted,
     CapacityExceeded,
     StackLimitExceeded,
     InsufficientItems,

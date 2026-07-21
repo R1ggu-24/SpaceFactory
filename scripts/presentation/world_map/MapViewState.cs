@@ -21,6 +21,7 @@ public sealed record MapViewState(
     IReadOnlyList<WorldPosition> FlightRoute,
     MapShipState Ship,
     string? ActiveTargetCometId,
+    string? ActiveTargetMarkerId,
     string? LastDiscoveredCometId)
 {
     public static MapViewState Empty { get; } = new(
@@ -31,6 +32,7 @@ public sealed record MapViewState(
         5_000,
         [],
         new MapShipState(new WorldPosition(0, 0), 0, true),
+        null,
         null,
         null);
 
@@ -43,4 +45,20 @@ public sealed record MapViewState(
 
         return Comets.FirstOrDefault(comet => comet.Id == id && comet.Exists);
     }
+
+    public MapMarkerData? FindMarker(string? id)
+    {
+        if (string.IsNullOrWhiteSpace(id))
+        {
+            return null;
+        }
+
+        return Markers.FirstOrDefault(marker => marker.Id == id && marker.Exists);
+    }
+
+    public WorldPosition? FindActiveTargetPosition() =>
+        FindComet(ActiveTargetCometId)?.WorldPosition ??
+        FindMarker(ActiveTargetMarkerId)?.WorldPosition;
+
+    public bool HasActiveTarget => FindActiveTargetPosition() is not null;
 }

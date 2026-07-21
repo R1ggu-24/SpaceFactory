@@ -1,4 +1,5 @@
 using SpaceFactory.Core.Inventory;
+using SpaceFactory.Core.Items;
 using SpaceFactory.Core.Production;
 
 namespace SpaceFactory.Core.Research;
@@ -18,6 +19,7 @@ public enum ResearchStartFailure
     AlreadyActive,
     AlreadyCompleted,
     MissingPrerequisite,
+    MissingDiscovery,
     MissingMaterials,
 }
 
@@ -38,22 +40,33 @@ public sealed record ResearchStateSnapshot(
     ResearchId? ActiveResearchId,
     double ProgressSeconds,
     bool IsEnabled,
-    ResearchStatus Status);
+    ResearchStatus Status,
+    IReadOnlyList<ItemId>? DiscoveredResources = null);
 
 public sealed class ResearchState
 {
     private const double Epsilon = 0.000_001;
     private readonly HashSet<ResearchId> _completedResearch = [];
+    private readonly HashSet<ItemId> _discoveredResources = [];
 
-    public ResearchState(IEnumerable<ResearchId>? completedResearch = null)
+    public ResearchState(
+        IEnumerable<ResearchId>? completedResearch = null,
+        IEnumerable<ItemId>? discoveredResources = null)
     {
         if (completedResearch is not null)
         {
             _completedResearch.UnionWith(completedResearch);
         }
+
+        if (discoveredResources is not null)
+        {
+            _discoveredResources.UnionWith(discoveredResources);
+        }
     }
 
     public IReadOnlySet<ResearchId> CompletedResearch => _completedResearch;
+
+    public IReadOnlySet<ItemId> DiscoveredResources => _discoveredResources;
 
     public ResearchId? ActiveResearchId { get; private set; }
 
@@ -65,23 +78,38 @@ public sealed class ResearchState
 
     public bool IsCompleted(ResearchId id) => _completedResearch.Contains(id);
 
+    public bool DiscoverResource(ItemId itemId)
+    {
+        if (string.IsNullOrWhiteSpace(itemId.Value))
+        {
+            throw new ArgumentException("A discovered resource ID cannot be empty.", nameof(itemId));
+        }
+
+        return _discoveredResources.Add(itemId);
+    }
+
     public ResearchStateSnapshot CreateSnapshot() => new(
         _completedResearch.OrderBy(id => id.Value, StringComparer.Ordinal).ToArray(),
         ActiveResearchId,
         ProgressSeconds,
         IsEnabled,
-        Status);
+        Status,
+        _discoveredResources.OrderBy(id => id.Value, StringComparer.Ordinal).ToArray());
 
     public static ResearchState Restore(ResearchStateSnapshot snapshot)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
-        if (!double.IsFinite(snapshot.ProgressSeconds) || snapshot.ProgressSeconds < 0 ||
+        var discoveries = snapshot.DiscoveredResources ?? [];
+        if (snapshot.CompletedResearch is null ||
+            !double.IsFinite(snapshot.ProgressSeconds) || snapshot.ProgressSeconds < 0 ||
+            discoveries.Any(itemId => string.IsNullOrWhiteSpace(itemId.Value)) ||
+            discoveries.Distinct().Count() != discoveries.Count ||
             (snapshot.ActiveResearchId is null && snapshot.ProgressSeconds > Epsilon))
         {
             throw new ArgumentException("The persisted research state is invalid.", nameof(snapshot));
         }
 
-        return new ResearchState(snapshot.CompletedResearch)
+        return new ResearchState(snapshot.CompletedResearch, discoveries)
         {
             ActiveResearchId = snapshot.ActiveResearchId,
             ProgressSeconds = snapshot.ProgressSeconds,
@@ -116,6 +144,11 @@ public sealed class ResearchState
         if (definition.Prerequisites.Any(prerequisite => !_completedResearch.Contains(prerequisite)))
         {
             return ResearchStartResult.Failed(ResearchStartFailure.MissingPrerequisite);
+        }
+
+        if (definition.RequiredDiscoveries.Any(discovery => !_discoveredResources.Contains(discovery)))
+        {
+            return ResearchStartResult.Failed(ResearchStartFailure.MissingDiscovery);
         }
 
         if (!ProductionInventoryRules.TryRemoveAll(materialInventory, definition.MaterialCosts))

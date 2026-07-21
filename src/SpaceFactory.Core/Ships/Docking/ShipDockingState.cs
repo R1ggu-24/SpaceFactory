@@ -20,6 +20,44 @@ public sealed class ShipDockingState
 
     public bool AreLandingLegsRetracted => LandingLegProgress <= 0;
 
+    public void RestoreAttached(
+        string cometId,
+        WorldPosition relativeAttachmentPosition,
+        double attachmentRotationRadians,
+        double landingLegProgress)
+    {
+        if (string.IsNullOrWhiteSpace(cometId) ||
+            !double.IsFinite(relativeAttachmentPosition.X) ||
+            !double.IsFinite(relativeAttachmentPosition.Y) ||
+            !double.IsFinite(attachmentRotationRadians) ||
+            !double.IsFinite(landingLegProgress) ||
+            landingLegProgress is < 0 or > FullyDeployedProgress)
+        {
+            throw new ArgumentException("The persisted ship docking state is invalid.");
+        }
+
+        IsAttached = true;
+        AttachedCometId = cometId;
+        RelativeAttachmentPosition = relativeAttachmentPosition;
+        AttachmentRotationRadians = attachmentRotationRadians;
+        LandingLegProgress = landingLegProgress;
+    }
+
+    public void RestoreDetached(double landingLegProgress = 0)
+    {
+        if (!double.IsFinite(landingLegProgress) ||
+            landingLegProgress is < 0 or > FullyDeployedProgress)
+        {
+            throw new ArgumentOutOfRangeException(nameof(landingLegProgress));
+        }
+
+        IsAttached = false;
+        AttachedCometId = null;
+        RelativeAttachmentPosition = default;
+        AttachmentRotationRadians = 0;
+        LandingLegProgress = landingLegProgress;
+    }
+
     public ShipDockingDecision TryExecute(
         ShipDockingContext context,
         ShipDockingConfiguration? configuration = null)

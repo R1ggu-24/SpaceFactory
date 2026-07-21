@@ -164,8 +164,15 @@ public partial class CircularMinimapControl : Control
                 DrawCircle(markerCenter, markerRadius + 3, new Color(0.85f, 0.65f, 0.28f, 0.82f), false, 1.5f);
             }
 
+            if (_snapshot.ActiveTargetCometId == item.Id)
+            {
+                DrawCircle(markerCenter, markerRadius + 6, new Color(0.16f, 0.80f, 1.0f, 0.94f), false, 2);
+            }
+
             DrawResourcePips(item, markerCenter, markerRadius);
         }
+
+        DrawCustomMarkers(center, contentRadius);
 
         var interactiveBorder = _isHovered
             ? new Color(0.22f, 0.82f, 1.0f, 1.0f)
@@ -205,6 +212,32 @@ public partial class CircularMinimapControl : Control
                 ? MapVisualPalette.ParseColor(resource.BaseColorHex, MapVisualPalette.Cyan)
                 : MapVisualPalette.GetResourceColor(resourceId);
             DrawCircle(pipPosition, 1.7f, color);
+        }
+    }
+
+    private void DrawCustomMarkers(Vector2 center, float contentRadius)
+    {
+        foreach (var marker in _snapshot.Markers)
+        {
+            if (!marker.Exists)
+            {
+                continue;
+            }
+
+            var relative = ToVector(marker.WorldPosition) - ToVector(_ship.Position);
+            if (relative.LengthSquared() > ScanRadius * ScanRadius)
+            {
+                continue;
+            }
+
+            var point = center + ProjectNorthUp(relative, ScanRadius, contentRadius);
+            var color = MapVisualPalette.ParseColor(marker.ColorHex, MapVisualPalette.Cyan);
+            DrawLine(point + new Vector2(0, 3), point + new Vector2(0, -4), color, 1.5f, true);
+            DrawCircle(point + new Vector2(0, -5), 2.5f, color);
+            if (_snapshot.ActiveTargetMarkerId == marker.Id)
+            {
+                DrawCircle(point, 7, new Color(0.16f, 0.80f, 1.0f, 0.94f), false, 1.7f);
+            }
         }
     }
 

@@ -98,6 +98,109 @@ public sealed class ExplorationMapServiceTests
     }
 
     [Fact]
+    public void Navigation_AutomaticallyEndsOnlyInsideCentralArrivalRadius()
+    {
+        var service = CreateService();
+        service.Scan(CreateContent(new SectorCoordinate(0, 0), "comet:a", "deposit:a"));
+        Assert.True(service.TryAddMarker(
+            "base",
+            "Basis",
+            new WorldPosition(20, 20),
+            "base",
+            "#33CCFF",
+            out _));
+        Assert.True(service.SelectTarget("comet:a"));
+        var target = Assert.IsType<DiscoveredCometData>(service.SelectedTarget);
+        var targetEvents = new List<string?>();
+        service.TargetChanged += targetEvents.Add;
+
+        var exactlyAtBoundary = new WorldPosition(
+            target.WorldPosition.X + target.Radius +
+            MapNavigationConfiguration.TargetReachedDistanceWorldUnits,
+            target.WorldPosition.Y);
+        Assert.False(service.TryCompleteNavigation(exactlyAtBoundary));
+        Assert.Equal("comet:a", service.SelectedTargetCometId);
+
+        var insideBoundary = new WorldPosition(
+            target.WorldPosition.X + target.Radius +
+            MapNavigationConfiguration.TargetReachedDistanceWorldUnits - 0.01,
+            target.WorldPosition.Y);
+        Assert.True(service.TryCompleteNavigation(insideBoundary));
+
+        Assert.Null(service.SelectedTargetCometId);
+        Assert.Equal([null], targetEvents);
+        Assert.Contains(service.DiscoveredComets, comet => comet.Id == "comet:a");
+        Assert.Contains(service.Markers, marker => marker.Id == "base");
+        Assert.False(service.TryCompleteNavigation(target.WorldPosition));
+    }
+
+    [Fact]
+    public void MarkerNavigation_AutomaticallyEndsInsideCentralArrivalRadius()
+    {
+        var service = CreateService();
+        service.Scan(CreateContent(new SectorCoordinate(0, 0), "comet:a", "deposit:a"));
+        var markerPosition = new WorldPosition(800, 900);
+        Assert.True(service.TryAddMarker(
+            "marker:destination",
+            "Zielpunkt",
+            markerPosition,
+            "pin",
+            "#33CCFF",
+            out _));
+        Assert.False(service.SelectMarkerTarget("marker:unknown"));
+
+        var targetEvents = new List<string?>();
+        service.TargetChanged += targetEvents.Add;
+        Assert.True(service.SelectMarkerTarget("marker:destination"));
+        Assert.Equal("marker:destination", service.SelectedTargetMarkerId);
+        Assert.Equal("marker:destination", service.SelectedMarkerTarget?.Id);
+        Assert.Null(service.SelectedTargetCometId);
+
+        var exactlyAtBoundary = markerPosition with
+        {
+            X = markerPosition.X + MapNavigationConfiguration.TargetReachedDistanceWorldUnits,
+        };
+        Assert.False(service.TryCompleteNavigation(exactlyAtBoundary));
+        Assert.Equal("marker:destination", service.SelectedTargetMarkerId);
+
+        var insideBoundary = exactlyAtBoundary with { X = exactlyAtBoundary.X - 0.01 };
+        Assert.True(service.TryCompleteNavigation(insideBoundary));
+
+        Assert.Null(service.SelectedTargetMarkerId);
+        Assert.Null(service.SelectedMarkerTarget);
+        Assert.Equal(["marker:destination", null], targetEvents);
+        Assert.Contains(service.Markers, marker => marker.Id == "marker:destination");
+    }
+
+    [Fact]
+    public void NavigationTarget_ExclusivelySwitchesBetweenCometAndMarker()
+    {
+        var service = CreateService();
+        service.Scan(CreateContent(new SectorCoordinate(0, 0), "comet:a", "deposit:a"));
+        Assert.True(service.TryAddMarker(
+            "marker:destination",
+            "Zielpunkt",
+            new WorldPosition(800, 900),
+            "pin",
+            "#33CCFF",
+            out _));
+
+        Assert.True(service.SelectTarget("comet:a"));
+        Assert.True(service.SelectMarkerTarget("marker:destination"));
+        Assert.Null(service.SelectedTargetCometId);
+        Assert.Equal("marker:destination", service.SelectedTargetMarkerId);
+
+        Assert.True(service.SelectTarget("comet:a"));
+        Assert.Equal("comet:a", service.SelectedTargetCometId);
+        Assert.Null(service.SelectedTargetMarkerId);
+
+        Assert.True(service.SelectMarkerTarget("marker:destination"));
+        Assert.True(service.RemoveMarker("marker:destination"));
+        Assert.Null(service.SelectedTargetMarkerId);
+        Assert.Empty(service.Markers);
+    }
+
+    [Fact]
     public void MissingResource_RemovesDepletedTypeFromCometSummary()
     {
         var service = CreateService();

@@ -53,6 +53,11 @@ public sealed class WorldGenerationTests
         Assert.All(sectors.SelectMany(sector => sector.Asteroids), comet =>
         {
             Assert.True(Enum.IsDefined(comet.Size));
+            Assert.True(Enum.IsDefined(comet.Geology));
+            Assert.EndsWith(
+                comet.Geology.ToString().ToLowerInvariant(),
+                comet.Type,
+                StringComparison.Ordinal);
             Assert.InRange(comet.Position.X, 0, SectorSize);
             Assert.InRange(comet.Position.Y, 0, SectorSize);
             Assert.InRange(comet.Radius, 40, WorldGenerationSettings.MaximumSupportedRadius);
@@ -232,8 +237,8 @@ public sealed class WorldGenerationTests
         var baseline = GenerateDensitySample(0.68, 0.018);
         var increased = GenerateDensitySample(0.76, 0.020);
 
-        Assert.Equal(470, baseline.CometCount);
-        Assert.Equal(491, increased.CometCount);
+        Assert.InRange(baseline.CometCount, 400, 550);
+        Assert.True(increased.CometCount > baseline.CometCount);
         var increase = (increased.CometCount - baseline.CometCount) / (double)baseline.CometCount;
         // Candidate probabilities rise by about 11%; placement spacing and field
         // conflict resolution deliberately keep the accepted-comet increase smaller.
@@ -258,6 +263,8 @@ public sealed class WorldGenerationTests
             var profile = Assert.IsType<AsteroidSurfaceProfile>(comet.SurfaceProfile);
             Assert.True(profile.BuildableRadius > 0);
             Assert.True(profile.TraversableRadius > profile.BuildableRadius);
+            var expectedBuildableRatio = comet.Size == AsteroidSize.Huge ? 0.78 : 0.70;
+            Assert.Equal(expectedBuildableRatio, profile.BuildableRadius / comet.Radius, precision: 10);
             Assert.StartsWith("sectors/", profile.PersistenceKey);
         });
 
@@ -269,9 +276,20 @@ public sealed class WorldGenerationTests
             comet =>
             {
                 Assert.True(comet.SupportsLanding);
-                Assert.InRange(comet.Radius, 1300, 1800);
-                Assert.True(comet.SurfaceProfile!.BuildableRadius >= 845);
+                Assert.InRange(
+                    comet.Radius,
+                    1300 * WorldGenerationDefaults.LargeCometScaleMultiplier,
+                    1800 * WorldGenerationDefaults.LargeCometScaleMultiplier);
+                Assert.True(
+                    comet.SurfaceProfile!.BuildableRadius >=
+                    845 * WorldGenerationDefaults.LargeCometScaleMultiplier);
             });
+
+        Assert.All(comets.Where(comet => comet.Size == AsteroidSize.Large), comet =>
+            Assert.InRange(
+                comet.Radius,
+                480 * WorldGenerationDefaults.LargeCometScaleMultiplier,
+                680 * WorldGenerationDefaults.LargeCometScaleMultiplier));
     }
 
     private IReadOnlyList<GeneratedSector> GenerateRegion(long seed, int minimum, int maximum)

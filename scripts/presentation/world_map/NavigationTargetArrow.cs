@@ -1,13 +1,12 @@
 using Godot;
 using SpaceFactory.Core.Common;
-using SpaceFactory.Core.World.Exploration;
 
 namespace SpaceFactory.Presentation.WorldMap;
 
 public partial class NavigationTargetArrow : Control
 {
     private MapShipState _ship = MapViewState.Empty.Ship;
-    private DiscoveredCometData? _target;
+    private WorldPosition? _targetPosition;
 
     public override void _Ready()
     {
@@ -26,7 +25,7 @@ public partial class NavigationTargetArrow : Control
     public void SetSnapshot(MapViewState snapshot)
     {
         _ship = snapshot.Ship;
-        _target = snapshot.FindComet(snapshot.ActiveTargetCometId);
+        _targetPosition = snapshot.FindActiveTargetPosition();
         QueueRedraw();
     }
 
@@ -38,12 +37,12 @@ public partial class NavigationTargetArrow : Control
 
     public override void _Draw()
     {
-        if (_target is null || !_ship.IsInShip || Size.X < 100 || Size.Y < 100)
+        if (_targetPosition is null || !_ship.IsInShip || Size.X < 100 || Size.Y < 100)
         {
             return;
         }
 
-        var delta = ToVector(_target.WorldPosition) - ToVector(_ship.Position);
+        var delta = ToVector(_targetPosition.Value) - ToVector(_ship.Position);
         if (delta.LengthSquared() < 1)
         {
             return;

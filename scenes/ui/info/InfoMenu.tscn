@@ -1,0 +1,177 @@
+[gd_scene load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scripts/presentation/info/InfoMenuController.cs" id="1_controller"]
+[ext_resource type="Script" path="res://scripts/presentation/settings/SciFiSettingsBackdrop.cs" id="2_backdrop"]
+
+[node name="InfoMenu" type="CanvasLayer"]
+layer = 101
+process_mode = 3
+visible = false
+script = ExtResource("1_controller")
+
+[node name="InputBlocker" type="ColorRect" parent="."]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 0
+color = Color(0, 0, 0, 1)
+
+[node name="Backdrop" type="Control" parent="InputBlocker"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+script = ExtResource("2_backdrop")
+
+[node name="SafeArea" type="MarginContainer" parent="InputBlocker"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="Frame" type="PanelContainer" parent="InputBlocker/SafeArea"]
+layout_mode = 2
+
+[node name="FrameMargin" type="MarginContainer" parent="InputBlocker/SafeArea/Frame"]
+layout_mode = 2
+
+[node name="Layout" type="VBoxContainer" parent="InputBlocker/SafeArea/Frame/FrameMargin"]
+layout_mode = 2
+theme_override_constants/separation = 10
+
+[node name="Header" type="HBoxContainer" parent="InputBlocker/SafeArea/Frame/FrameMargin/Layout"]
+layout_mode = 2
+theme_override_constants/separation = 18
+
+[node name="Title" type="Label" parent="InputBlocker/SafeArea/Frame/FrameMargin/Layout/Header"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "WISSENSDATENBANK"
+theme_override_colors/font_color = Color(0.91, 0.97, 1, 1)
+theme_override_colors/font_shadow_color = Color(0, 0.64, 0.9, 0.55)
+theme_override_constants/shadow_offset_x = 2
+theme_override_constants/shadow_offset_y = 2
+theme_override_font_sizes/font_size = 38
+
+[node name="Badge" type="Label" parent="InputBlocker/SafeArea/Frame/FrameMargin/Layout/Header"]
+layout_mode = 2
+text = "INFO // SF-ARCHIV"
+horizontal_alignment = 2
+vertical_alignment = 1
+theme_override_colors/font_color = Color(0.18, 0.78, 1, 0.9)
+theme_override_font_sizes/font_size = 15
+
+[node name="HeaderLine" type="HSeparator" parent="InputBlocker/SafeArea/Frame/FrameMargin/Layout"]
+layout_mode = 2
+
+[node name="Body" type="HBoxContainer" parent="InputBlocker/SafeArea/Frame/FrameMargin/Layout"]
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_constants/separation = 14
+
+[node name="NavigationPanel" type="PanelContainer" parent="InputBlocker/SafeArea/Frame/FrameMargin/Layout/Body"]
+custom_minimum_size = Vector2(270, 0)
+layout_mode = 2
+
+[node name="Margin" type="MarginContainer" parent="InputBlocker/SafeArea/Frame/FrameMargin/Layout/Body/NavigationPanel"]
+layout_mode = 2
+theme_override_constants/margin_left = 12
+theme_override_constants/margin_top = 14
+theme_override_constants/margin_right = 12
+theme_override_constants/margin_bottom = 14
+
+[node name="Layout" type="VBoxContainer" parent="InputBlocker/SafeArea/Frame/FrameMargin/Layout/Body/NavigationPanel/Margin"]
+layout_mode = 2
+theme_override_constants/separation = 10
+
+[node name="NavigationTitle" type="Label" parent="InputBlocker/SafeArea/Frame/FrameMargin/Layout/Body/NavigationPanel/Margin/Layout"]
+layout_mode = 2
+text = "BEREICHE"
+theme_override_colors/font_color = Color(0.34, 0.85, 1, 1)
+theme_override_font_sizes/font_size = 14
+
+[node name="NavigationLine" type="HSeparator" parent="InputBlocker/SafeArea/Frame/FrameMargin/Layout/Body/NavigationPanel/Margin/Layout"]
+layout_mode = 2
+
+[node name="NavigationList" type="VBoxContainer" parent="InputBlocker/SafeArea/Frame/FrameMargin/Layout/Body/NavigationPanel/Margin/Layout"]
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_constants/separation = 10
+
+[node name="ContentPanel" type="PanelContainer" parent="InputBlocker/SafeArea/Frame/FrameMargin/Layout/Body"]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="Margin" type="MarginContainer" parent="InputBlocker/SafeArea/Frame/FrameMargin/Layout/Body/ContentPanel"]
+layout_mode = 2
+theme_override_constants/margin_left = 20
+theme_override_constants/margin_top = 16
+theme_override_constants/margin_right = 20
+theme_override_constants/margin_bottom = 16
+
+[node name="Content" type="VBoxContainer" parent="InputBlocker/SafeArea/Frame/FrameMargin/Layout/Body/ContentPanel/Margin"]
+layout_mode = 2
+theme_override_constants/separation = 9
+
+[node name="Kicker" type="Label" parent="InputBlocker/SafeArea/Frame/FrameMargin/Layout/Body/ContentPanel/Margin/Content"]
+layout_mode = 2
+text = "SYSTEMÜBERSICHT"
+theme_override_colors/font_color = Color(0.18, 0.72, 0.9, 1)
+theme_override_font_sizes/font_size = 13
+
+[node name="SectionTitle" type="Label" parent="InputBlocker/SafeArea/Frame/FrameMargin/Layout/Body/ContentPanel/Margin/Content"]
+layout_mode = 2
+text = "WERKZEUGE"
+theme_override_colors/font_color = Color(0.88, 0.96, 1, 1)
+theme_override_font_sizes/font_size = 34
+
+[node name="Introduction" type="Label" parent="InputBlocker/SafeArea/Frame/FrameMargin/Layout/Body/ContentPanel/Margin/Content"]
+custom_minimum_size = Vector2(0, 46)
+layout_mode = 2
+text = "Kompakte Übersicht"
+autowrap_mode = 2
+theme_override_colors/font_color = Color(0.68, 0.8, 0.86, 1)
+theme_override_font_sizes/font_size = 17
+
+[node name="ContentLine" type="HSeparator" parent="InputBlocker/SafeArea/Frame/FrameMargin/Layout/Body/ContentPanel/Margin/Content"]
+layout_mode = 2
+
+[node name="Cards" type="GridContainer" parent="InputBlocker/SafeArea/Frame/FrameMargin/Layout/Body/ContentPanel/Margin/Content"]
+layout_mode = 2
+size_flags_vertical = 3
+columns = 2
+theme_override_constants/h_separation = 13
+theme_override_constants/v_separation = 13
+
+[node name="FooterLine" type="HSeparator" parent="InputBlocker/SafeArea/Frame/FrameMargin/Layout"]
+layout_mode = 2
+
+[node name="Footer" type="HBoxContainer" parent="InputBlocker/SafeArea/Frame/FrameMargin/Layout"]
+layout_mode = 2
+theme_override_constants/separation = 14
+
+[node name="Back" type="Button" parent="InputBlocker/SafeArea/Frame/FrameMargin/Layout/Footer"]
+custom_minimum_size = Vector2(180, 44)
+layout_mode = 2
+text = "ZURÜCK"
+
+[node name="Spacer" type="Control" parent="InputBlocker/SafeArea/Frame/FrameMargin/Layout/Footer"]
+layout_mode = 2
+size_flags_horizontal = 3
+mouse_filter = 2
+
+[node name="PageStatus" type="Label" parent="InputBlocker/SafeArea/Frame/FrameMargin/Layout/Footer"]
+layout_mode = 2
+text = "01 / 07"
+horizontal_alignment = 2
+vertical_alignment = 1
+theme_override_colors/font_color = Color(0.22, 0.78, 0.94, 1)
+theme_override_font_sizes/font_size = 14
