@@ -13,6 +13,8 @@ public partial class SectorView : Node2D
 
     public IReadOnlyList<AsteroidView> Comets => _cometViews;
 
+    public IReadOnlyList<ResourceDepositView> Resources => _resourceViews;
+
     public event Action<string>? ResourceExhausted;
 
     public void Display(

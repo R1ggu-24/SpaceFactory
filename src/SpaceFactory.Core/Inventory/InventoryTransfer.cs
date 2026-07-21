@@ -9,6 +9,7 @@ public enum InventoryTransferFailure
     TargetStackFull,
     IncompatibleStacks,
     StackLimitExceeded,
+    ItemNotAccepted,
 }
 
 public readonly record struct InventoryTransferResult(
@@ -29,6 +30,75 @@ public readonly record struct InventoryTransferResult(
 
 public static class InventoryTransfer
 {
+    /// <summary>
+    /// Previews a transfer between two different inventories while preferring every
+    /// partially filled stack of the same item before the explicitly selected empty
+    /// slot. Transfers inside one inventory retain the normal slot-to-slot semantics.
+    /// </summary>
+    public static InventoryTransferResult PreviewPrioritizingExistingStacks(
+        SlotInventory source,
+        int sourceIndex,
+        SlotInventory target,
+        int targetIndex,
+        int? amount = null)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        ArgumentNullException.ThrowIfNull(target);
+        var sourceSlot = source.GetSlot(sourceIndex);
+        var targetSlot = target.GetSlot(targetIndex);
+        return ReferenceEquals(source, target) ||
+               (!sourceSlot.IsEmpty && !targetSlot.IsEmpty && targetSlot.ItemId != sourceSlot.ItemId)
+            ? Preview(source, sourceIndex, target, targetIndex, amount)
+            : EvaluatePrioritizingExistingStacks(source, sourceIndex, target, targetIndex, amount).Result;
+    }
+
+    /// <summary>
+    /// Moves a stack transactionally between inventories. Existing compatible stacks
+    /// are filled first and only the remainder is assigned to the selected empty slot.
+    /// The complete mutation plan is validated before either inventory is changed.
+    /// </summary>
+    public static InventoryTransferResult TransferPrioritizingExistingStacks(
+        SlotInventory source,
+        int sourceIndex,
+        SlotInventory target,
+        int targetIndex,
+        int? amount = null)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        ArgumentNullException.ThrowIfNull(target);
+        var sourceSlotBefore = source.GetSlot(sourceIndex);
+        var targetSlotBefore = target.GetSlot(targetIndex);
+        if (ReferenceEquals(source, target) ||
+            (!sourceSlotBefore.IsEmpty && !targetSlotBefore.IsEmpty &&
+             targetSlotBefore.ItemId != sourceSlotBefore.ItemId))
+        {
+            return Transfer(source, sourceIndex, target, targetIndex, amount);
+        }
+
+        var plan = EvaluatePrioritizingExistingStacks(source, sourceIndex, target, targetIndex, amount);
+        if (!plan.Result.Succeeded || plan.TargetChanges.Count == 0)
+        {
+            return plan.Result;
+        }
+
+        var sourceSlot = source.GetMutableSlot(sourceIndex);
+        foreach (var change in plan.TargetChanges)
+        {
+            var targetSlot = target.GetMutableSlot(change.SlotIndex);
+            if (targetSlot.IsEmpty)
+            {
+                targetSlot.Assign(sourceSlot.ItemId!.Value, change.Amount);
+            }
+            else
+            {
+                targetSlot.ChangeAmount(targetSlot.Amount + change.Amount);
+            }
+        }
+
+        sourceSlot.ChangeAmount(sourceSlot.Amount - plan.Result.MovedAmount);
+        return plan.Result;
+    }
+
     public static InventoryTransferResult Preview(
         SlotInventory source,
         int sourceIndex,
@@ -98,9 +168,18 @@ public static class InventoryTransfer
                 movedAmount: 0);
         }
 
+        var sourceItemId = sourceSlot.ItemId!.Value;
+        if (!target.AcceptsItem(sourceItemId))
+        {
+            return InventoryTransferPlan.Failed(
+                InventoryTransferFailure.ItemNotAccepted,
+                requestedAmount);
+        }
+
         if (targetSlot.IsEmpty)
         {
-            if (requestedAmount > targetSlot.MaximumAmount)
+            var targetMaximum = target.GetMaximumStackSize(sourceItemId);
+            if (requestedAmount > targetMaximum)
             {
                 return InventoryTransferPlan.Failed(
                     InventoryTransferFailure.StackLimitExceeded,
@@ -115,7 +194,8 @@ public static class InventoryTransfer
 
         if (sourceSlot.ItemId == targetSlot.ItemId)
         {
-            var available = targetSlot.MaximumAmount - targetSlot.Amount;
+            var targetMaximum = target.GetMaximumStackSize(sourceSlot.ItemId!.Value);
+            var available = targetMaximum - targetSlot.Amount;
             if (available == 0)
             {
                 return InventoryTransferPlan.Failed(
@@ -136,7 +216,15 @@ public static class InventoryTransfer
                 requestedAmount);
         }
 
-        if (sourceSlot.Amount > targetSlot.MaximumAmount || targetSlot.Amount > sourceSlot.MaximumAmount)
+        if (!source.AcceptsItem(targetSlot.ItemId!.Value))
+        {
+            return InventoryTransferPlan.Failed(
+                InventoryTransferFailure.ItemNotAccepted,
+                requestedAmount);
+        }
+
+        if (sourceSlot.Amount > target.GetMaximumStackSize(sourceItemId) ||
+            targetSlot.Amount > source.GetMaximumStackSize(targetSlot.ItemId!.Value))
         {
             return InventoryTransferPlan.Failed(
                 InventoryTransferFailure.StackLimitExceeded,
@@ -148,6 +236,80 @@ public static class InventoryTransfer
             requestedAmount,
             requestedAmount,
             swapped: true);
+    }
+
+    private static PrioritizedTransferPlan EvaluatePrioritizingExistingStacks(
+        SlotInventory source,
+        int sourceIndex,
+        SlotInventory target,
+        int targetIndex,
+        int? amount)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        ArgumentNullException.ThrowIfNull(target);
+
+        var sourceSlot = source.GetSlot(sourceIndex);
+        var targetSlot = target.GetSlot(targetIndex);
+        if (sourceSlot.IsEmpty)
+        {
+            return PrioritizedTransferPlan.Failed(InventoryTransferFailure.SourceEmpty);
+        }
+
+        var requestedAmount = amount ?? sourceSlot.Amount;
+        if (requestedAmount <= 0)
+        {
+            return PrioritizedTransferPlan.Failed(
+                InventoryTransferFailure.InvalidAmount,
+                requestedAmount);
+        }
+
+        if (requestedAmount > sourceSlot.Amount)
+        {
+            return PrioritizedTransferPlan.Failed(
+                InventoryTransferFailure.InsufficientItems,
+                requestedAmount);
+        }
+
+        var itemId = sourceSlot.ItemId!.Value;
+        if (!target.AcceptsItem(itemId))
+        {
+            return PrioritizedTransferPlan.Failed(
+                InventoryTransferFailure.ItemNotAccepted,
+                requestedAmount);
+        }
+
+        var maximum = target.GetMaximumStackSize(itemId);
+        var remaining = requestedAmount;
+        var targetChanges = new List<PrioritizedTargetChange>();
+
+        foreach (var existing in target.Slots.Where(slot =>
+                     slot.ItemId == itemId && slot.Amount < maximum))
+        {
+            var moved = Math.Min(maximum - existing.Amount, remaining);
+            if (moved <= 0)
+            {
+                break;
+            }
+
+            targetChanges.Add(new PrioritizedTargetChange(existing.Index, moved));
+            remaining -= moved;
+        }
+
+        if (remaining > 0 && targetSlot.IsEmpty)
+        {
+            var moved = Math.Min(maximum, remaining);
+            targetChanges.Add(new PrioritizedTargetChange(targetIndex, moved));
+            remaining -= moved;
+        }
+
+        var movedAmount = requestedAmount - remaining;
+        return movedAmount <= 0
+            ? PrioritizedTransferPlan.Failed(
+                InventoryTransferFailure.TargetStackFull,
+                requestedAmount)
+            : new PrioritizedTransferPlan(
+                InventoryTransferResult.Success(requestedAmount, movedAmount),
+                targetChanges);
     }
 
     private static void Apply(
@@ -212,5 +374,18 @@ public static class InventoryTransfer
             new(
                 InventoryTransferResult.Failed(failure, requestedAmount),
                 InventoryTransferOperation.None);
+    }
+
+    private readonly record struct PrioritizedTargetChange(int SlotIndex, int Amount);
+
+    private readonly record struct PrioritizedTransferPlan(
+        InventoryTransferResult Result,
+        IReadOnlyList<PrioritizedTargetChange> TargetChanges)
+    {
+        public static PrioritizedTransferPlan Failed(
+            InventoryTransferFailure failure,
+            int requestedAmount = 0) =>
+            new(InventoryTransferResult.Failed(failure, requestedAmount), []);
+
     }
 }

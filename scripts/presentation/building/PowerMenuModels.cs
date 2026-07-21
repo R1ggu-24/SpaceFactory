@@ -47,8 +47,9 @@ public sealed record PowerSourceViewModel(
     bool CanToggle);
 
 /// <summary>
-/// Complete read-only UI snapshot for a pole, generator, consumer or ship
-/// connector. No gameplay objects are retained by the menu.
+/// Complete read-only UI snapshot for a pole, generator or ship power connector.
+/// Consumers remain visible as members of the selected network, but cannot open
+/// this overview directly. No gameplay objects are retained by the menu.
 /// </summary>
 public sealed record PowerMenuViewModel(
     string NetworkId,

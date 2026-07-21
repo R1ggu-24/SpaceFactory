@@ -5,10 +5,17 @@
 Das Baumenü wird zu Fuss über die konfigurierbare Aktion `build_menu` (Standard `B`) geöffnet. Im Raumschiff bleibt die Aktion gesperrt. Nach der Auswahl folgt eine transparente Vorschau der Weltmaus:
 
 - Raster: 24 Welteinheiten
-- Rotation: 10 Grad pro Mausradschritt
+- Rotation: 10 Grad über die konfigurierbare Aktion `rotate_building` (Standard `R`)
 - Linksklick: gültige Maschine bauen
 - Rechtsklick oder Escape: abbrechen
 - B: zur Maschinenauswahl zurückkehren
+
+Die letzte Rotation wird während der laufenden Spielsitzung zentral geteilt.
+Jede neu gestartete rotierbare Vorschau aus Baumenü oder Hotbar übernimmt den
+Winkel der vorherigen Vorschau; beim ersten Bau sind es null Grad. Nicht
+rotierbare Objekte ignorieren den Wert. Normales Mausrad verändert die Hotbar
+während einer Baumenü-Platzierung nicht, bleibt bei physischer Hotbar-
+Platzierung aber Teil des Hotbarwechsels.
 
 Gebaut werden kann nur auf `Large`- und `Huge`-Kometen. Die Prüfung verwendet den echten Kometentyp, den vollständigen prozeduralen Umriss, den `BuildableRadius`, Krater, Terrainunebenheit, Maschinen-Footprints sowie die aktuellen Materialien. Baukosten werden atomar und ausschliesslich aus dem Astronauteninventar entfernt. Eine ungültige Vorschau entfernt nichts. Der Aufbau reserviert die Fläche sofort und dauert abhängig von der Maschine 1,2 bis 1,8 Sekunden.
 
@@ -28,6 +35,13 @@ Eine nahe Maschine wird mit der konfigurierten E-Aktion geöffnet. Wenn Cockpit 
 
 `DefaultRecipeCatalog` enthält 49 zentrale Rezepte. Die gemeinsame `MachineState`-Logik prüft vollständige Eingaben und freien Ausgaberaum, entfernt Zutaten erst beim Start eines gültigen Zyklus und erzeugt Ausgaben atomar. Rezept und Startschalter bleiben im Snapshot erhalten. Die UI lädt jeweils einen vollständigen Rezeptstapel und entnimmt Ausgaben nur, wenn das Astronauteninventar alles aufnehmen kann. Sowohl loser Treibstoff als auch Wasserstoffbehälter können in der Raffinerie verlustfrei in Treibstoffbehälter überführt werden.
 
+Beim Schmelzen behalten die vorhandenen Rezepte für zerkleinertes Eisen-,
+Kupfer-, Nickel- und Titanerz ihre bisherigen Zykluszeiten. Das entsprechende
+Roherz benötigt datenbasiert exakt den zentralen Faktor `1,5`: Eisen und Kupfer
+`4,2 s` statt `2,8 s`, Nickel `4,5 s` statt `3,0 s` und Titan `6,0 s` statt
+`4,0 s`. Die Rezeptauswahl zeigt die jeweilige Zyklusdauer direkt neben dem
+Rezeptnamen.
+
 Der Lagercontainer verwendet 30 Slots. Alle Inventare behalten das zentrale Stapellimit von 200. Produkte, Rohstoffe und Behälter werden über denselben `ItemId`- und `ItemPresentationCatalog` dargestellt. Beim Ein- und Auslagern wird so viel wie sicher hineinpasst übertragen; der Rest bleibt unverändert zurück und kann in weiteren Durchgängen entnommen werden, auch wenn das 20-Slot-Astronauteninventar kleiner als der Container ist.
 
 Die Weltansichten der zwölf Maschinen verwenden individuelle Top-down-Silhouetten im gemeinsamen dunklen Titan-/Graphitstil. Bewegte Walzen, Hitze, Guss- und Montagearme, Pumpen, Blasen, Turbinen oder Scanner laufen nur, wenn die zugehörige Maschine wirklich produziert. Kleine Statusleuchten zeigen Bereitschaft, Produktion und Wartezustände; die Darstellung verändert keine Core-Zustände.
@@ -42,7 +56,7 @@ Der sechste Baumenübereich `TRANSPORT` enthält Stromkabel, Förderband, Flüss
 - Flüssigkeits- und Gasleitung verwenden dasselbe baubare Transportrohr, bleiben im Netzwerk aber getrennte, nicht kompatible Verbindungstypen.
 - Produktionsports werden aus den tatsächlichen Rezepten und Stoffphasen abgeleitet. Jeder Stromanschluss erlaubt genau ein Kabel; der Strommast besitzt sechs getrennte sichtbare Anschlüsse, die intern ein gemeinsames Netzsegment bilden. Lager besitzt bidirektionale Ports pro Stoffphase.
 
-Neue Spielstände enthalten im Raumschifflager je fünf Stromkabel, fünf Förderbänder und fünf Transportrohre. Zum Bauen müssen die benötigten Elemente wie andere Baumaterialien in das Astronauteninventar übertragen werden. Transfers prüfen Quellmenge und Zielkapazität vorab und rollen einen fehlgeschlagenen Zieltransfer zurück; Gegenstände werden daher weder dupliziert noch gelöscht. Weitere Architekturdetails stehen in [LOGISTICS_SYSTEM.md](LOGISTICS_SYSTEM.md).
+Neue Spielstände enthalten als kleine Testausrüstung im Raumschifflager je drei Stromkabel, drei Förderbänder und drei Transportrohre. Die maximale Stapelgröße bleibt 200. Zum Bauen werden die Elemente erst in das Astronauteninventar und anschließend in die Hotbar übertragen. Transfers prüfen Quellmenge und Zielkapazität vorab und rollen einen fehlgeschlagenen Zieltransfer zurück; Gegenstände werden daher weder dupliziert noch gelöscht. Weitere Architekturdetails stehen in [LOGISTICS_SYSTEM.md](LOGISTICS_SYSTEM.md).
 
 ## Stoffe und Behälter
 
@@ -58,6 +72,8 @@ Stromkabel zerlegen die Maschinen eines Kometen in echte getrennte Netzkomponent
 - fehlende Materialien, fehlende Energie und volle Ausgaben pausieren, ohne den Startschalter auszuschalten
 - überlastete Netze lösen nach `1,5 s` den Schutzschalter aus und liefern bis zum manuellen Wiedereinschalten keinen Strom
 - Raumschiffanschluss A und B sind als getrennte externe Quellen mit je `40 kW` vorbereitet und verbrauchen nur gelieferte Leistung aus demselben Schiffstank (`0,0005` Treibstoff pro kW-s)
+
+Der Treibstoffgenerator besitzt zusätzlich einen manuell bedienbaren internen Tank für sechs vollständige Behälter beziehungsweise `720 s`. `Material laden` legt einen verfügbaren vollen oder leeren Treibstoffbehälter in den Maschineneingang. `Tank auffüllen` ersetzt genau einen vollen Behälter im Tank-Transfer-Slot durch seinen leeren Behälter; `Tank leeren` ersetzt dort genau einen leeren Behälter wieder durch einen vollen. Der Behälter bleibt damit in demselben Eingabeslot. Beide Richtungen prüfen Tankmenge und den Platz zum sicheren Umlagern eines eventuell gestapelten Rests vor der Mutation und rollen eine fehlgeschlagene Transaktion vollständig zurück. Teilbehälter werden absichtlich nicht erzeugt: Reicht ein Rest im Tank nicht für volle `120 s`, bleibt er unverändert im Tank.
 
 Die Forschungsstation nutzt sechs zentral definierte Forschungen mit Materialkosten, Voraussetzungen, Dauer, Leistungsbedarf sowie freigeschalteten Maschinen und Rezepten. Forschungsfortschritt und abgeschlossene Technologien werden gespeichert.
 

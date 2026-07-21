@@ -2,6 +2,7 @@ using Godot;
 using SpaceFactory.Core.Inventory;
 using SpaceFactory.Core.Ships.Fuel;
 using SpaceFactory.Core.World.Resources;
+using SpaceFactory.Core.Hazards;
 
 namespace SpaceFactory.Presentation.UI;
 
@@ -17,6 +18,9 @@ public partial class ResourceHud : CanvasLayer
     private ProgressBar _fuelProgress = null!;
     private Label _fuelAmount = null!;
     private Label _fuelTime = null!;
+    private PanelContainer _radiationPanel = null!;
+    private ProgressBar _radiationProgress = null!;
+    private Label _radiationStatus = null!;
     private double _messageRemaining;
     private string? _shipPrompt;
     private string? _resourcePrompt;
@@ -33,10 +37,14 @@ public partial class ResourceHud : CanvasLayer
         _fuelProgress = GetNode<ProgressBar>("FuelPanel/Content/FuelProgress");
         _fuelAmount = GetNode<Label>("FuelPanel/Content/FuelAmount");
         _fuelTime = GetNode<Label>("FuelPanel/Content/FuelTime");
+        _radiationPanel = GetNode<PanelContainer>("RadiationPanel");
+        _radiationProgress = GetNode<ProgressBar>("RadiationPanel/Content/DoseProgress");
+        _radiationStatus = GetNode<Label>("RadiationPanel/Content/DoseStatus");
         _interaction.Visible = false;
         _miningPanel.Visible = false;
         _message.Visible = false;
         _fuelPanel.Visible = false;
+        _radiationPanel.Visible = false;
     }
 
     public override void _Process(double delta)
@@ -110,6 +118,35 @@ public partial class ResourceHud : CanvasLayer
         var minutes = (int)(remainingSeconds / 60);
         var seconds = (int)remainingSeconds % 60;
         _fuelTime.Text = $"Boostzeit {minutes:00}:{seconds:00}";
+    }
+
+    public void SetRadiation(
+        double accumulatedDose,
+        double currentDoseRate,
+        double suitIntegrity,
+        RadiationExposureLevel level,
+        bool visible)
+    {
+        _radiationPanel.Visible = visible;
+        if (!visible)
+        {
+            return;
+        }
+
+        _radiationProgress.Value = Math.Clamp(
+            accumulatedDose,
+            0,
+            RadiationConfiguration.MaximumDose);
+        var (label, color) = level switch
+        {
+            RadiationExposureLevel.Critical => ("KRITISCH", new Color(1, 0.28f, 0.22f)),
+            RadiationExposureLevel.Elevated => ("ERHÖHT", new Color(1, 0.76f, 0.2f)),
+            _ => ("SICHER", new Color(0.66f, 1, 0.36f)),
+        };
+        _radiationStatus.Text = currentDoseRate > 0.001
+            ? $"{label} · Dosis {accumulatedDose:0.0} · +{currentDoseRate:0.00}/s · Anzug {suitIntegrity:P0}"
+            : $"{label} · Dosis {accumulatedDose:0.0} · Anzug {suitIntegrity:P0}";
+        _radiationStatus.AddThemeColorOverride("font_color", color);
     }
 
     public void UpdateInventory(SlotInventory inventory, IReadOnlyList<ResourceDefinition> resources)

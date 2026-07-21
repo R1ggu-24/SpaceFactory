@@ -81,4 +81,42 @@ public sealed class MachineInventoryTransferTests
         Assert.Equal(0, storage.TotalItemCount);
         Assert.Equal(20, astronaut.TotalItemCount);
     }
+
+    [Fact]
+    public void PartialTransfer_RespectsPerItemStackLimitAndUsesNextFreeSlot()
+    {
+        static int StackSize(ItemId itemId) =>
+            itemId == ProductionItemIds.MachineDismantlingTool ? 1 : 200;
+
+        var output = new SlotInventory(2, itemStackSizeResolver: StackSize);
+        var astronaut = new SlotInventory(2, itemStackSizeResolver: StackSize);
+        Assert.True(output.Add(ProductionItemIds.MachineDismantlingTool, 1).Succeeded);
+        Assert.True(astronaut.Add(ProductionItemIds.MachineDismantlingTool, 1).Succeeded);
+
+        var result = MachineInventoryTransfer.TransferAsMuchAsPossible(output, astronaut);
+
+        Assert.True(result.Succeeded);
+        Assert.Equal(0, output.TotalItemCount);
+        Assert.Equal(2, astronaut.GetAmount(ProductionItemIds.MachineDismantlingTool));
+        Assert.All(astronaut.Slots.Where(slot => !slot.IsEmpty), slot => Assert.Equal(1, slot.Amount));
+    }
+
+    [Fact]
+    public void PartialTransfer_SplitsALegacyOverstackAcrossNonStackableTargetSlots()
+    {
+        static int StackSize(ItemId itemId) =>
+            itemId == ProductionItemIds.MachineDismantlingTool ? 1 : 200;
+
+        var legacyOutput = new SlotInventory(1);
+        var astronaut = new SlotInventory(2, itemStackSizeResolver: StackSize);
+        Assert.True(legacyOutput.Add(ProductionItemIds.MachineDismantlingTool, 2).Succeeded);
+
+        var result = MachineInventoryTransfer.TransferAsMuchAsPossible(legacyOutput, astronaut);
+
+        Assert.True(result.Succeeded);
+        Assert.Equal(2, result.TransferredItemCount);
+        Assert.Equal(0, legacyOutput.TotalItemCount);
+        Assert.Equal(2, astronaut.GetAmount(ProductionItemIds.MachineDismantlingTool));
+        Assert.All(astronaut.Slots, slot => Assert.Equal(1, slot.Amount));
+    }
 }

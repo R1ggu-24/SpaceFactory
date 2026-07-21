@@ -34,7 +34,8 @@ public sealed class JsonGameSettingsStore : IGameSettingsStore
                 document.SchemaVersion,
                 input,
                 document.Audio ?? AudioSettings.Default,
-                document.Video ?? VideoSettings.Default).Normalize();
+                document.Video ?? VideoSettings.Default,
+                document.HotbarMouseWheelEnabled).Normalize();
         }
         catch (Exception exception)
         {
@@ -51,7 +52,8 @@ public sealed class JsonGameSettingsStore : IGameSettingsStore
             normalized.SchemaVersion,
             normalized.Input.Bindings.ToDictionary(pair => pair.Key, pair => pair.Value),
             normalized.Audio,
-            normalized.Video);
+            normalized.Video,
+            normalized.HotbarMouseWheelEnabled);
         var json = JsonSerializer.Serialize(document, JsonOptions);
         using var file = Godot.FileAccess.Open(SavePath, Godot.FileAccess.ModeFlags.Write);
         if (file is null)
@@ -74,5 +76,6 @@ public sealed class JsonGameSettingsStore : IGameSettingsStore
         int SchemaVersion,
         Dictionary<GameAction, InputBinding>? InputBindings,
         AudioSettings? Audio,
-        VideoSettings? Video);
+        VideoSettings? Video,
+        bool HotbarMouseWheelEnabled = false);
 }

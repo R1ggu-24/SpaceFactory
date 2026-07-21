@@ -1,4 +1,5 @@
 using Godot;
+using SpaceFactory.Core.Items;
 
 namespace SpaceFactory.Presentation.Building;
 
@@ -35,6 +36,21 @@ public enum MachineGlyph
     GasPipe,
     Storage,
     Research,
+    MobileMiner,
+    AutomaticMiner,
+    ChemicalPlant,
+    Assembler,
+    AdvancedFabricator,
+    PrecisionManufacturer,
+    LiquidTank,
+    GasTank,
+    PumpStation,
+    BatteryBank,
+    UraniumProcessor,
+    FuelCellFabricator,
+    NuclearReactor,
+    WasteProcessor,
+    NuclearWasteStorage,
 }
 
 public enum MachineUiStatus
@@ -75,7 +91,8 @@ public sealed record MachineMaterialViewModel(
     string DisplayName,
     int RequiredAmount,
     int AvailableAmount,
-    Color Accent)
+    Color Accent,
+    ItemId? ItemId = null)
 {
     public bool IsAvailable => AvailableAmount >= RequiredAmount;
 }
@@ -85,9 +102,32 @@ public sealed record MachineOutputViewModel(
     int ProducedAmount,
     int StoredAmount,
     int Capacity,
-    Color Accent)
+    Color Accent,
+    ItemId? ItemId = null,
+    bool IsWaste = false,
+    bool IsRadioactive = false)
 {
     public bool IsFull => Capacity > 0 && StoredAmount >= Capacity;
+}
+
+/// <summary>
+/// One physical machine-output slot. Keeping this separate from the recipe's
+/// aggregate output quantities lets the presentation show empty slots and the
+/// real per-stack limit without inventing a second inventory model.
+/// </summary>
+public sealed record MachineInventorySlotViewModel(
+    int SlotIndex,
+    ItemId? ItemId,
+    string DisplayName,
+    int Amount,
+    int MaximumAmount,
+    Color Accent,
+    bool IsWaste = false,
+    bool IsRadioactive = false)
+{
+    public bool IsEmpty => ItemId is null || Amount <= 0;
+
+    public bool IsFull => !IsEmpty && MaximumAmount > 0 && Amount >= MaximumAmount;
 }
 
 public sealed record MachineRecipeViewModel(
@@ -115,7 +155,16 @@ public sealed record MachinePanelViewModel(
     bool IsActive,
     float ProductionProgress,
     float RequiredPower,
-    float AvailablePower);
+    float AvailablePower,
+    IReadOnlyList<MachineInventorySlotViewModel>? OutputSlots = null,
+    IReadOnlyList<MachineInventorySlotViewModel>? InputSlots = null,
+    bool HasGeneratorFuelTankControls = false,
+    float GeneratorFuelSeconds = 0,
+    float GeneratorFuelCapacitySeconds = 0,
+    int LoadedFilledFuelContainers = 0,
+    int LoadedEmptyFuelContainers = 0,
+    bool GeneratorTankTransferSlotOccupied = false,
+    bool GeneratorTankTransferSlotHasWrongContent = false);
 
 public static class BuildMenuCategoryPresentation
 {

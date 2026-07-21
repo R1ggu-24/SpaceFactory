@@ -114,6 +114,26 @@ public static class DefaultMachinePortCatalog
                 continue;
             }
 
+            // The mobile miner is deliberately independent from the cable grid. Its internal
+            // battery is handled by the extraction state, so exposing a power socket here would
+            // falsely imply that a cable is required.
+            if (machine.Id == MachineDefinitionIds.MobileMiner)
+            {
+                yield return MaterialPort(
+                    machine.Id,
+                    MachinePortIds.SolidInput,
+                    ProductionItemPhase.Solid,
+                    MachinePortDirection.Input,
+                    MachinePortInventorySide.Input,
+                    [ProductionItemIds.MobileBatteryPack]);
+                foreach (var port in CreateRecipeMaterialPorts(machine, recipes, items))
+                {
+                    yield return port;
+                }
+
+                continue;
+            }
+
             yield return new MachinePortDefinition(
                 machine.Id,
                 MachinePortIds.Power,
@@ -124,15 +144,33 @@ public static class DefaultMachinePortCatalog
 
             if (machine.Kind == MachineKind.Storage)
             {
-                foreach (var phase in Enum.GetValues<ProductionItemPhase>())
+                var acceptedPhases = machine.Archetype switch
                 {
+                    MachineArchetype.LiquidStorage => [ProductionItemPhase.Liquid],
+                    MachineArchetype.GasStorage => [ProductionItemPhase.Gas],
+                    MachineArchetype.FluidTransport =>
+                        [ProductionItemPhase.Liquid, ProductionItemPhase.Gas],
+                    MachineArchetype.SolidStorage when
+                        machine.Id == MachineDefinitionIds.NuclearWasteStorage =>
+                        [ProductionItemPhase.Solid],
+                    _ => Enum.GetValues<ProductionItemPhase>(),
+                };
+                foreach (var phase in acceptedPhases)
+                {
+                    var allowedItems = machine.Id == MachineDefinitionIds.NuclearWasteStorage
+                        ? items.All
+                            .Where(item => item.Phase == phase &&
+                                           item.HazardKind == ItemHazardKind.Radioactive)
+                            .Select(item => item.Id)
+                            .ToArray()
+                        : null;
                     yield return MaterialPort(
                         machine.Id,
                         MachinePortIds.StorageFor(phase),
                         phase,
                         MachinePortDirection.Bidirectional,
                         MachinePortInventorySide.Input,
-                        null);
+                        allowedItems);
                 }
 
                 continue;
@@ -177,6 +215,18 @@ public static class DefaultMachinePortCatalog
                 continue;
             }
 
+            foreach (var port in CreateRecipeMaterialPorts(machine, recipes, items))
+            {
+                yield return port;
+            }
+        }
+    }
+
+    private static IEnumerable<MachinePortDefinition> CreateRecipeMaterialPorts(
+        MachineDefinition machine,
+        RecipeCatalog recipes,
+        ProductionItemCatalog items)
+    {
             var machineRecipes = recipes.ForMachine(machine.Id);
             var inputItems = machineRecipes
                 .SelectMany(recipe => recipe.Inputs)
@@ -209,7 +259,6 @@ public static class DefaultMachinePortCatalog
                     MachinePortInventorySide.Output,
                     group);
             }
-        }
     }
 
     private static MachinePortDefinition MaterialPort(

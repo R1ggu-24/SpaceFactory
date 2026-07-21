@@ -70,10 +70,17 @@ public static class MachineInventoryTransfer
     /// </summary>
     public static MachineInventoryTransferResult TransferAsMuchAsPossible(
         SlotInventory source,
-        SlotInventory target)
+        SlotInventory target) =>
+        TransferAsMuchAsPossible(source, target, static _ => true);
+
+    public static MachineInventoryTransferResult TransferAsMuchAsPossible(
+        SlotInventory source,
+        SlotInventory target,
+        Func<SpaceFactory.Core.Items.ItemId, bool> itemFilter)
     {
         ArgumentNullException.ThrowIfNull(source);
         ArgumentNullException.ThrowIfNull(target);
+        ArgumentNullException.ThrowIfNull(itemFilter);
         if (ReferenceEquals(source, target))
         {
             return MachineInventoryTransferResult.Failed(MachineInventoryTransferFailure.NothingToTransfer);
@@ -86,15 +93,29 @@ public static class MachineInventoryTransfer
             while (!source.GetSlot(sourceIndex).IsEmpty)
             {
                 var itemId = source.GetSlot(sourceIndex).ItemId!.Value;
+                if (!itemFilter(itemId))
+                {
+                    break;
+                }
+                var targetMaximum = target.GetMaximumStackSize(itemId);
                 var targetSlot = target.Slots.FirstOrDefault(slot =>
-                                     slot.ItemId == itemId && slot.Amount < slot.MaximumAmount) ??
+                                     slot.ItemId == itemId && slot.Amount < targetMaximum) ??
                                  target.Slots.FirstOrDefault(slot => slot.IsEmpty);
                 if (targetSlot is null)
                 {
                     break;
                 }
 
-                var result = InventoryTransfer.Transfer(source, sourceIndex, target, targetSlot.Index);
+                var availableTargetAmount = targetSlot.IsEmpty
+                    ? targetMaximum
+                    : targetMaximum - targetSlot.Amount;
+                var transferAmount = Math.Min(source.GetSlot(sourceIndex).Amount, availableTargetAmount);
+                var result = InventoryTransfer.Transfer(
+                    source,
+                    sourceIndex,
+                    target,
+                    targetSlot.Index,
+                    transferAmount);
                 if (!result.Succeeded || result.MovedAmount <= 0)
                 {
                     throw new InvalidOperationException("A validated partial machine transfer failed.");

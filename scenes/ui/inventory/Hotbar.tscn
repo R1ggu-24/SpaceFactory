@@ -1,0 +1,66 @@
+[gd_scene load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scripts/presentation/inventory/HotbarController.cs" id="1_hotbar"]
+[ext_resource type="Script" path="res://scripts/presentation/inventory/InventoryItemContextMenu.cs" id="2_context_menu"]
+
+[node name="Hotbar" type="CanvasLayer"]
+layer = 72
+process_mode = 3
+script = ExtResource("1_hotbar")
+
+[node name="Root" type="Control" parent="."]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+
+[node name="Frame" type="PanelContainer" parent="Root"]
+layout_mode = 1
+anchors_preset = 7
+anchor_left = 0.5
+anchor_top = 1.0
+anchor_right = 0.5
+anchor_bottom = 1.0
+offset_left = -232.0
+offset_top = -82.0
+offset_right = 232.0
+offset_bottom = -16.0
+grow_horizontal = 2
+grow_vertical = 0
+mouse_filter = 0
+
+[node name="Margin" type="MarginContainer" parent="Root/Frame"]
+layout_mode = 2
+theme_override_constants/margin_left = 8
+theme_override_constants/margin_top = 4
+theme_override_constants/margin_right = 8
+theme_override_constants/margin_bottom = 4
+
+[node name="Slots" type="HBoxContainer" parent="Root/Frame/Margin"]
+layout_mode = 2
+theme_override_constants/separation = 7
+
+[node name="Grid" type="GridContainer" parent="Root/Frame/Margin/Slots"]
+layout_mode = 2
+theme_override_constants/h_separation = 7
+theme_override_constants/v_separation = 0
+columns = 6
+
+[node name="HandSlotHost" type="MarginContainer" parent="Root/Frame/Margin/Slots"]
+layout_mode = 2
+tooltip_text = "HAND-SLOT"
+theme_override_constants/margin_left = 9
+
+[node name="ItemContextMenu" type="Control" parent="Root"]
+visible = false
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 0
+script = ExtResource("2_context_menu")

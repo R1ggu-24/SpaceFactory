@@ -118,15 +118,18 @@ public partial class PowerCablePlacementPreview : Node2D
         _candidate = candidate;
         _candidateAllowed = isCompatible;
         var withinRange = IsWithinMaximumLength(candidate);
+        var pointerWithinRange = IsPointerWithinMaximumLength();
         SetHint(
             candidate is null
-                ? "KABEL: FREIEN ZWEITEN ANSCHLUSS WÄHLEN"
+                ? pointerWithinRange
+                    ? "KABEL: FREIEN ZWEITEN ANSCHLUSS WÄHLEN"
+                    : "KABEL ZU LANG"
                 : isCompatible && withinRange
                     ? "ANSCHLUSS FREI · KLICKEN ZUM VERBINDEN"
                     : string.IsNullOrWhiteSpace(failureMessage)
                         ? withinRange ? "ANSCHLUSS NICHT VERFÜGBAR" : "KABEL ZU LANG"
                         : failureMessage.ToUpperInvariant(),
-            candidate is null || (isCompatible && withinRange));
+            candidate is null ? pointerWithinRange : isCompatible && withinRange);
         QueueRedraw();
     }
 
@@ -181,7 +184,7 @@ public partial class PowerCablePlacementPreview : Node2D
         var target = _candidate is { IsValid: true }
             ? ToLocal(_candidate.GetWorldPosition())
             : ToLocal(GetGlobalMousePosition());
-        var valid = _candidate is null || IsCandidateValid;
+        var valid = _candidate is null ? IsPointerWithinMaximumLength() : IsCandidateValid;
         var route = PowerCableDrawing.CreateCurve(source, target, bendDirection: 1);
         PowerCableDrawing.DrawCable(this, route, active: valid, utilization: valid ? 0.72f : 0, flowPhase: 0);
         if (!valid)
@@ -226,6 +229,10 @@ public partial class PowerCablePlacementPreview : Node2D
 
         return _source.GetWorldPosition().DistanceTo(endpoint.GetWorldPosition()) <= _maximumLength;
     }
+
+    private bool IsPointerWithinMaximumLength() =>
+        _source is null || !_source.IsValid ||
+        _source.GetWorldPosition().DistanceTo(GetGlobalMousePosition()) <= _maximumLength;
 
     private void EnsureHint()
     {

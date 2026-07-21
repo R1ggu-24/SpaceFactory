@@ -13,6 +13,8 @@ public enum MachinePlacementFailureReason
     SurfaceUnavailable,
     OutsideBuildableArea,
     SurfaceUneven,
+    ResourceSourceRequired,
+    ResourceSourceOccupied,
     MachineBlocked,
     MaterialsMissing,
 }
@@ -26,6 +28,7 @@ public partial class MachinePlacementPreview : Node2D
 
     private Func<IReadOnlyList<AsteroidView>>? _cometProvider;
     private Func<IReadOnlyList<MachineView>>? _machineProvider;
+    private Func<IReadOnlyList<ResourceDepositView>>? _resourceProvider;
     private Func<MachineDefinitionId, bool>? _materialAvailability;
     private MachinePresentationDefinition? _presentation;
     private MachineDefinitionId? _selectedDefinitionId;
@@ -52,6 +55,8 @@ public partial class MachinePlacementPreview : Node2D
 
     public float RelativeRotationRadians => _relativeRotation;
 
+    public bool SupportsRotation => _presentation?.SupportsRotation == true;
+
     public override void _Ready()
     {
         ZIndex = 50;
@@ -77,29 +82,41 @@ public partial class MachinePlacementPreview : Node2D
 
     public void ConfigureWorldSources(
         Func<IReadOnlyList<AsteroidView>> cometProvider,
-        Func<IReadOnlyList<MachineView>> machineProvider)
+        Func<IReadOnlyList<MachineView>> machineProvider,
+        Func<IReadOnlyList<ResourceDepositView>>? resourceProvider = null)
     {
         ArgumentNullException.ThrowIfNull(cometProvider);
         ArgumentNullException.ThrowIfNull(machineProvider);
         _cometProvider = cometProvider;
         _machineProvider = machineProvider;
+        _resourceProvider = resourceProvider;
     }
 
     public void Start(
         string machineDefinitionId,
         Func<MachineDefinitionId, bool> materialAvailability) =>
-        Start(new MachineDefinitionId(machineDefinitionId), materialAvailability);
+        Start(new MachineDefinitionId(machineDefinitionId), materialAvailability, initialRotationRadians: 0);
 
     public void Start(
         MachineDefinitionId machineDefinitionId,
-        Func<MachineDefinitionId, bool> materialAvailability)
+        Func<MachineDefinitionId, bool> materialAvailability,
+        float initialRotationRadians = 0)
     {
         ArgumentNullException.ThrowIfNull(materialAvailability);
+        if (!float.IsFinite(initialRotationRadians))
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(initialRotationRadians),
+                "A placement rotation must be finite.");
+        }
+
         _presentation = MachinePresentationCatalog.Instance.Get(machineDefinitionId);
         _selectedDefinitionId = machineDefinitionId;
         _materialAvailability = materialAvailability;
         _targetComet = null;
-        _relativeRotation = 0;
+        _relativeRotation = _presentation.SupportsRotation
+            ? Mathf.Wrap(initialRotationRadians, -Mathf.Pi, Mathf.Pi)
+            : 0;
         CurrentFailure = MachinePlacementFailureReason.FreeSpace;
         IsActive = true;
         Visible = true;
@@ -132,7 +149,7 @@ public partial class MachinePlacementPreview : Node2D
 
     public void Rotate(int stepDirection)
     {
-        if (!IsActive || stepDirection == 0)
+        if (!IsActive || !SupportsRotation || stepDirection == 0)
         {
             return;
         }
@@ -168,7 +185,8 @@ public partial class MachinePlacementPreview : Node2D
         _hasMousePosition = true;
         var comets = _cometProvider?.Invoke() ?? [];
         var machines = _machineProvider?.Invoke() ?? [];
-        Evaluate(worldMousePosition, comets, machines);
+        var resources = _resourceProvider?.Invoke() ?? [];
+        Evaluate(worldMousePosition, comets, machines, resources);
         RefreshMachineGlyphPreview();
         RefreshReasonLabel();
         QueueRedraw();
@@ -240,7 +258,8 @@ public partial class MachinePlacementPreview : Node2D
     private void Evaluate(
         Vector2 worldMousePosition,
         IReadOnlyList<AsteroidView> comets,
-        IReadOnlyList<MachineView> machines)
+        IReadOnlyList<MachineView> machines,
+        IReadOnlyList<ResourceDepositView> resources)
     {
         if (_selectedDefinitionId is not { } selectedDefinitionId || _materialAvailability is null)
         {
@@ -266,9 +285,38 @@ public partial class MachinePlacementPreview : Node2D
         }
 
         _targetComet = containingComet;
-        _snappedLocalPosition = MachinePlacementGeometry.SnapToGrid(
-            containingComet.ToLocal(worldMousePosition),
-            MachinePresentationCatalog.PlacementGridSize);
+        var machineDefinition = DefaultMachineCatalog.Instance.Get(selectedDefinitionId);
+        if (machineDefinition.PlacementRequirement == MachinePlacementRequirement.ResourceDeposit)
+        {
+            var targetResource = resources
+                .Where(resource => GodotObject.IsInstanceValid(resource) &&
+                                   resource.GetParent() == containingComet &&
+                                   resource.IsInfinite)
+                .OrderBy(resource => resource.GlobalPosition.DistanceSquaredTo(worldMousePosition))
+                .FirstOrDefault();
+            var maximumSelectionDistance = targetResource is null
+                ? 0
+                : Math.Max(
+                    54f,
+                    (float)targetResource.Deposit.GetRadiusWorldUnits(containingComet.Radius) + 22f);
+            if (targetResource is null ||
+                targetResource.GlobalPosition.DistanceTo(worldMousePosition) > maximumSelectionDistance)
+            {
+                _snappedLocalPosition = containingComet.ToLocal(worldMousePosition);
+                GlobalPosition = worldMousePosition;
+                GlobalRotation = containingComet.GlobalRotation + _relativeRotation;
+                CurrentFailure = MachinePlacementFailureReason.ResourceSourceRequired;
+                return;
+            }
+
+            _snappedLocalPosition = targetResource.Position;
+        }
+        else
+        {
+            _snappedLocalPosition = MachinePlacementGeometry.SnapToGrid(
+                containingComet.ToLocal(worldMousePosition),
+                MachinePresentationCatalog.PlacementGridSize);
+        }
         GlobalPosition = containingComet.ToGlobal(_snappedLocalPosition);
         GlobalRotation = containingComet.GlobalRotation + _relativeRotation;
 
@@ -277,6 +325,12 @@ public partial class MachinePlacementPreview : Node2D
             _presentation!.Footprint,
             _relativeRotation);
         var surfaceFailure = containingComet.EvaluateBuildFootprint(localFootprint);
+        if (machineDefinition.PlacementRequirement == MachinePlacementRequirement.ResourceDeposit &&
+            surfaceFailure is AsteroidBuildSurfaceFailure.UnsupportedCometSize or
+                AsteroidBuildSurfaceFailure.Crater or AsteroidBuildSurfaceFailure.UnevenTerrain)
+        {
+            surfaceFailure = AsteroidBuildSurfaceFailure.None;
+        }
         CurrentFailure = MapSurfaceFailure(surfaceFailure);
         if (CurrentFailure != MachinePlacementFailureReason.None)
         {
@@ -397,15 +451,17 @@ public partial class MachinePlacementPreview : Node2D
     public static string GetReasonText(MachinePlacementFailureReason reason) => reason switch
     {
         MachinePlacementFailureReason.None => string.Empty,
-        MachinePlacementFailureReason.PlacementNotActive => "Platzierungsmodus nicht aktiv",
-        MachinePlacementFailureReason.FreeSpace => "Nur auf grossen Kometen baubar",
+        MachinePlacementFailureReason.PlacementNotActive => "Platzierung nicht aktiv",
+        MachinePlacementFailureReason.FreeSpace => "Ausserhalb des Kometen",
         MachinePlacementFailureReason.CometTooSmall => "Komet zu klein",
-        MachinePlacementFailureReason.SurfaceUnavailable => "Oberfläche ungeeignet",
-        MachinePlacementFailureReason.OutsideBuildableArea => "Zu nah am Rand der sicheren Baufläche",
-        MachinePlacementFailureReason.SurfaceUneven => "Krater oder unebene Fläche",
-        MachinePlacementFailureReason.MachineBlocked => "Maschine blockiert",
+        MachinePlacementFailureReason.SurfaceUnavailable => "Gelände ungeeignet",
+        MachinePlacementFailureReason.OutsideBuildableArea => "Ausserhalb des Kometen",
+        MachinePlacementFailureReason.SurfaceUneven => "Gelände zu uneben",
+        MachinePlacementFailureReason.ResourceSourceRequired => "Nur auf Erz platzierbar",
+        MachinePlacementFailureReason.ResourceSourceOccupied => "Erzquelle belegt",
+        MachinePlacementFailureReason.MachineBlocked => "Objekt blockiert",
         MachinePlacementFailureReason.MaterialsMissing => "Materialien fehlen",
-        _ => "Platzierung ungültig",
+        _ => "Platzierung blockiert",
     };
 
     private void DrawCornerBrackets(Vector2 half, Color color)

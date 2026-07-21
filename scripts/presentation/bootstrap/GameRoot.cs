@@ -6,10 +6,12 @@ using SpaceFactory.Core.Logistics;
 using SpaceFactory.Core.Common;
 using SpaceFactory.Core.Player;
 using SpaceFactory.Core.Production;
+using SpaceFactory.Core.Settings;
 using SpaceFactory.Core.Ships.Docking;
 using SpaceFactory.Core.Ships.Fuel;
 using SpaceFactory.Core.World.Asteroids;
 using SpaceFactory.Core.World.Exploration;
+using SpaceFactory.Core.Hazards;
 using SpaceFactory.Core.World.Generation;
 using SpaceFactory.Core.World.Resources;
 using SpaceFactory.Core.World.Seeds;
@@ -17,6 +19,7 @@ using SpaceFactory.Core.World.Sectors;
 using SpaceFactory.Infrastructure.Data;
 using SpaceFactory.Infrastructure.Persistence;
 using SpaceFactory.Presentation.Building;
+using SpaceFactory.Presentation.Info;
 using SpaceFactory.Presentation.InventoryUI;
 using SpaceFactory.Presentation.Player;
 using SpaceFactory.Presentation.Settings;
@@ -75,8 +78,11 @@ public partial class GameRoot : Node
     private readonly Dictionary<SectorCoordinate, GeneratedSectorContent> _preparedSectors = [];
     private readonly HashSet<SectorCoordinate> _currentlyScannedSectors = [];
     private readonly ExplorationMapService _explorationMap = new(SectorSize, Seed);
-    private readonly SlotInventory _astronautInventory = new(InventoryConfiguration.AstronautSlotCount);
-    private readonly SlotInventory _shipInventory = new(InventoryConfiguration.ShipSlotCount);
+    private RadiationExposureLevel _lastRadiationLevel;
+    private readonly SlotInventory _astronautInventory = CreatePlayerInventory(InventoryConfiguration.AstronautSlotCount);
+    private readonly HotbarState _hotbarState = new(CreatePlayerInventory(InventoryConfiguration.HotbarSlotCount));
+    private readonly ToolInventoryState _toolInventoryState = ToolInventoryState.Create();
+    private readonly SlotInventory _shipInventory = CreatePlayerInventory(InventoryConfiguration.ShipSlotCount);
     private readonly ShipInteractionPressGate _shipInteractionPressGate = new();
     private readonly ShipDockingPressGate _shipDockingPressGate = new();
     private readonly ShipDockingConfiguration _dockingConfiguration = ShipDockingConfiguration.Default;
@@ -85,8 +91,10 @@ public partial class GameRoot : Node
     private OnFootPlayerController _onFootPlayer = null!;
     private WorldMapController _worldMap = null!;
     private ResourceHud _resourceHud = null!;
+    private HotbarController _hotbar = null!;
     private InventoryMenuController _inventoryMenu = null!;
     private SettingsMenuController _settingsMenu = null!;
+    private InfoMenuController _infoMenu = null!;
     private BuildMenuController _buildMenu = null!;
     private MachinePanelController _machinePanel = null!;
     private CanvasLayer _powerMenuLayer = null!;
@@ -107,11 +115,13 @@ public partial class GameRoot : Node
         ShipDockingDecision.Blocked(ShipDockingBlockReason.NoCandidate);
     private ShipDockingContext _availableDockingContext;
     private AsteroidView? _availableDockingComet;
+    private Vector2? _availableSafeExitPosition;
     private ShipDockingAction _displayedDockingAction;
     private MachineState? _availableMachineInteraction;
     private PowerInteractionTarget? _availablePowerInteraction;
     private PowerInteractionTarget? _displayedPowerInteraction;
     private MachineState? _machinePanelTarget;
+    private MachineState? _inventoryStorageTarget;
     private PowerInteractionTarget? _powerMenuTarget;
     private MachineInstanceId? _displayedMachineInteractionId;
 
@@ -124,8 +134,10 @@ public partial class GameRoot : Node
         _onFootPlayer = GetNode<OnFootPlayerController>("World/OnFootPlayer");
         _worldMap = GetNode<WorldMapController>("WorldMap/Controller");
         _resourceHud = GetNode<ResourceHud>("ResourceHud");
+        _hotbar = GetNode<HotbarController>("Hotbar");
         _inventoryMenu = GetNode<InventoryMenuController>("InventoryMenu");
         _settingsMenu = GetNode<SettingsMenuController>("SettingsMenu");
+        _infoMenu = GetNode<InfoMenuController>("InfoMenu");
         _buildMenu = GetNode<BuildMenuController>("BuildMenu");
         _machinePanel = GetNode<MachinePanelController>("MachinePanel");
         _factory = GetNode<FactoryRuntimeController>("World/FactoryRuntime");
@@ -143,11 +155,18 @@ public partial class GameRoot : Node
         _powerMenu.DisconnectPortRequested += HandlePowerPortDisconnectRequested;
         _powerMenuLayer.AddChild(_powerMenu);
         _inventoryMenu.Closed += HandleInventoryClosed;
-        _inventoryMenu.RefuelRequested += HandleRefuelRequested;
+        _inventoryMenu.ShipFuelTransferRequested += HandleShipFuelTransferRequested;
+        _inventoryMenu.InventoryChanged += HandleInventoryChanged;
+        _inventoryMenu.WorldDropRequested += HandleWorldDropRequested;
+        _inventoryMenu.HotbarItemActivationRequested += HandleInventoryHotbarActivationRequested;
+        _inventoryMenu.ToolItemActivationRequested += HandleInventoryToolActivationRequested;
+        _hotbar.ContextActionRequested += HandleHotbarContextActionRequested;
         _worldMap.MapVisibilityChanged += HandleMapVisibilityChanged;
         _worldMap.MapOpenRequested += HandleMapOpenRequested;
         _settingsMenu.Closed += HandleSettingsClosed;
         _settingsMenu.InputBindingsChanged += HandleInputBindingsChanged;
+        _settingsMenu.InfoRequested += HandleInfoRequested;
+        _infoMenu.BackRequested += HandleInfoBackRequested;
         _buildMenu.MachineSelected += HandleBuildMachineSelected;
         _buildMenu.Closed += HandleBuildMenuClosed;
         _machinePanel.RecipeSelectionRequested += HandleMachineRecipeSelected;
@@ -155,6 +174,10 @@ public partial class GameRoot : Node
         _machinePanel.LoadInputsRequested += HandleMachineLoadInputsRequested;
         _machinePanel.CollectOutputsRequested += HandleMachineCollectOutputsRequested;
         _machinePanel.ReturnInputsRequested += HandleMachineReturnInputsRequested;
+        _machinePanel.GeneratorTankFillRequested += HandleGeneratorTankFillRequested;
+        _machinePanel.GeneratorTankDrainRequested += HandleGeneratorTankDrainRequested;
+        _machinePanel.PersonalInventoryChanged += HandleInventoryChanged;
+        _machinePanel.WorldDropRequested += HandleWorldDropRequested;
         _machinePanel.Closed += HandleMachinePanelClosed;
         _factory.FactoryStateChanged += HandleFactoryStateChanged;
         _factory.BuildCatalogChanged += HandleBuildCatalogChanged;
@@ -166,30 +189,59 @@ public partial class GameRoot : Node
         _worldMap.SetResourceCatalog(_resourceCatalog);
         _inventoryMenu.Initialize(
             _astronautInventory,
+            _hotbarState.Inventory,
+            _toolInventoryState,
             _shipInventory,
             _resourceCatalog,
             DefaultProductionItemCatalog.Instance);
         var itemPresentation = ItemPresentationCatalog.Create(
             _resourceCatalog,
             DefaultProductionItemCatalog.Instance);
+        _machinePanel.ConfigurePersonalInventory(
+            _astronautInventory,
+            itemPresentation,
+            _factory.PreviewOpenMachineSlotTransfer,
+            _factory.TransferOpenMachineSlot,
+            _factory.DeleteOpenMachineStack);
+        _hotbar.Initialize(
+            _hotbarState,
+            _toolInventoryState,
+            itemPresentation,
+            HandleHotbarSlotSelected,
+            ActivateHandSlot);
         _factory.Initialize(
             _astronautInventory,
+            _hotbarState.Inventory,
+            _toolInventoryState,
             itemPresentation,
             new JsonFactoryStateStore(),
             () => _ship.FuelTank.CurrentFuel,
+            () => _ship.FuelTank.CurrentFuelType,
             _ship.RestoreFuel,
+            () => _hotbarState.ActiveSlotIndex,
+            RestoreActiveHotbarSlot,
             message => _resourceHud.ShowMessage(message));
         _factory.AttachShipInventory(_shipInventory);
         _factory.AttachShipPower(_ship, SectorSize);
+        _factory.AttachWorldItemContext(
+            () => _controlMode == PlayerControlMode.OnFoot
+                ? _onFootPlayer.GlobalPosition
+                : _ship.GlobalPosition,
+            () => _controlMode == PlayerControlMode.OnFoot
+                ? _onFootPlayer.Velocity
+                : _ship.Velocity,
+            () => _controlMode == PlayerControlMode.OnFoot && _primaryUiMode == PrimaryUiMode.None);
         _ship.FuelChanged += HandleShipFuelChanged;
         RefreshBuildMenuCatalog();
         _buildMenu.SetBuildActionLabel(InputBindingFormatter.FormatAction("build_menu"));
-        _inventoryMenu.SetFuelTankState(_ship.FuelTank.CurrentFuel, _ship.FuelTank.Capacity);
+        RefreshShipFuelInventoryUi();
         _onFootPlayer.Initialize(
             _astronautInventory,
             _resourceCatalog,
             _resourceHud,
-            IsGameplayInputBlocked);
+            IsGameplayInputBlocked,
+            IsMovementInputBlocked);
+        RefreshHotbarAndEquipment();
         SetControlMode(PlayerControlMode.Ship, updateUi: false);
         var initialSector = ToSectorCoordinate(_ship.GlobalPosition);
         LoadAround(initialSector, GetStreamingCenter(initialSector));
@@ -213,6 +265,14 @@ public partial class GameRoot : Node
             _factory.MachineInteractionRequested -= OpenMachinePanel;
         }
 
+        if (GodotObject.IsInstanceValid(_machinePanel))
+        {
+            _machinePanel.PersonalInventoryChanged -= HandleInventoryChanged;
+            _machinePanel.WorldDropRequested -= HandleWorldDropRequested;
+            _machinePanel.GeneratorTankFillRequested -= HandleGeneratorTankFillRequested;
+            _machinePanel.GeneratorTankDrainRequested -= HandleGeneratorTankDrainRequested;
+        }
+
         if (GodotObject.IsInstanceValid(_powerMenu))
         {
             _powerMenu.Closed -= HandlePowerMenuClosed;
@@ -225,6 +285,20 @@ public partial class GameRoot : Node
         if (GodotObject.IsInstanceValid(_worldMap))
         {
             _worldMap.MapOpenRequested -= HandleMapOpenRequested;
+        }
+
+        if (GodotObject.IsInstanceValid(_inventoryMenu))
+        {
+            _inventoryMenu.InventoryChanged -= HandleInventoryChanged;
+            _inventoryMenu.WorldDropRequested -= HandleWorldDropRequested;
+            _inventoryMenu.ShipFuelTransferRequested -= HandleShipFuelTransferRequested;
+            _inventoryMenu.HotbarItemActivationRequested -= HandleInventoryHotbarActivationRequested;
+            _inventoryMenu.ToolItemActivationRequested -= HandleInventoryToolActivationRequested;
+        }
+
+        if (GodotObject.IsInstanceValid(_hotbar))
+        {
+            _hotbar.ContextActionRequested -= HandleHotbarContextActionRequested;
         }
 
         if (GodotObject.IsInstanceValid(_ship))
@@ -245,9 +319,35 @@ public partial class GameRoot : Node
         _resourceHud.SetShipFuel(
             _ship.FuelTank.CurrentFuel,
             _controlMode == PlayerControlMode.Ship);
+        var isOnFoot = _controlMode == PlayerControlMode.OnFoot;
+        var radiationRate = _factory.UpdatePlayerRadiation(
+            delta,
+            isOnFoot ? _onFootPlayer.GlobalPosition : _ship.GlobalPosition,
+            isOnFoot);
+        var radiationLevel = _factory.RadiationExposure.Level;
+        _onFootPlayer.SetRadiationEffects(
+            _factory.RadiationExposure.MovementMultiplier,
+            _factory.RadiationExposure.MiningEfficiencyMultiplier);
+        _resourceHud.SetRadiation(
+            _factory.RadiationExposure.AccumulatedDose,
+            radiationRate,
+            _factory.RadiationExposure.Integrity,
+            radiationLevel,
+            isOnFoot && (_factory.RadiationExposure.AccumulatedDose > 0.05 || radiationRate > 0.001));
+        if (isOnFoot && radiationLevel != _lastRadiationLevel &&
+            radiationLevel != RadiationExposureLevel.Safe)
+        {
+            _resourceHud.ShowMessage(
+                radiationLevel == RadiationExposureLevel.Critical
+                    ? "WARNUNG: Kritische Strahlenbelastung"
+                    : "Warnung: Erhöhte Strahlenbelastung",
+                3.2);
+        }
+
+        _lastRadiationLevel = radiationLevel;
         if (_inventoryMenu.IsOpen && _controlMode == PlayerControlMode.Ship)
         {
-            _inventoryMenu.SetFuelTankState(_ship.FuelTank.CurrentFuel, _ship.FuelTank.Capacity);
+            RefreshShipFuelInventoryUi();
         }
 
         if (_primaryUiMode == PrimaryUiMode.PowerMenu)
@@ -262,8 +362,11 @@ public partial class GameRoot : Node
 
         if (_primaryUiMode == PrimaryUiMode.PauseMenu)
         {
+            CancelActiveDismantling();
             return;
         }
+
+        UpdateDismantlingInteraction(delta);
 
         _dockingCheckElapsed += delta;
         RefreshDockingAvailability();
@@ -322,25 +425,87 @@ public partial class GameRoot : Node
             return;
         }
 
+        if (TryHandleMenuBackInput(@event))
+        {
+            return;
+        }
+
         if (_primaryUiMode == PrimaryUiMode.PauseMenu)
         {
             return;
         }
 
-        if (_factory.IsPlacementActive && _primaryUiMode == PrimaryUiMode.None)
+        // _Input runs before Control._GuiInput. Leave pointer events over an interactive Control
+        // untouched so hotbar slots, the minimap and menus receive the click instead of placing
+        // or dismantling an object in the world behind them.
+        if (@event is InputEventMouseButton { Pressed: true } pointerEvent &&
+            IsPointerOverInteractiveUi() &&
+            !CanSelectHotbarWithWheelOverHud(pointerEvent))
         {
-            if (@event.IsActionPressed("build_menu"))
+            return;
+        }
+
+        if (_controlMode == PlayerControlMode.OnFoot && _primaryUiMode == PrimaryUiMode.None)
+        {
+            if (@event.IsActionPressed(InputActionCatalog.Get(GameAction.ActivateHandSlot).InputMapAction))
             {
-                _factory.CancelPlacement();
-                SetPrimaryUiMode(PrimaryUiMode.BuildMenu);
+                ActivateHandSlot();
                 GetViewport().SetInputAsHandled();
                 return;
             }
 
-            if (IsEscapePress(@event))
+            if (_toolInventoryState.IsHandModeActive &&
+                @event.IsActionPressed(InputActionCatalog.Get(GameAction.PreviousTool).InputMapAction))
+            {
+                SelectRelativeTool(previous: true);
+                GetViewport().SetInputAsHandled();
+                return;
+            }
+
+            if (_toolInventoryState.IsHandModeActive &&
+                @event.IsActionPressed(InputActionCatalog.Get(GameAction.NextTool).InputMapAction))
+            {
+                SelectRelativeTool(previous: false);
+                GetViewport().SetInputAsHandled();
+                return;
+            }
+
+            if (_settingsMenu.HotbarMouseWheelEnabled &&
+                (!_factory.IsPlacementActive || _factory.IsHotbarPlacementActive) &&
+                @event is InputEventMouseButton
+                {
+                    Pressed: true,
+                    ButtonIndex: MouseButton.WheelUp or MouseButton.WheelDown,
+                } wheel)
+            {
+                SelectRelativeHotbar(wheel.ButtonIndex == MouseButton.WheelUp ? -1 : 1);
+                GetViewport().SetInputAsHandled();
+                return;
+            }
+        }
+
+        if (_controlMode == PlayerControlMode.OnFoot &&
+            _primaryUiMode == PrimaryUiMode.None &&
+            TryGetPressedHotbarSlot(@event, out var hotbarSlotIndex))
+        {
+            SelectHotbarSlot(hotbarSlotIndex);
+            GetViewport().SetInputAsHandled();
+            return;
+        }
+
+        if (_factory.IsPlacementActive && _primaryUiMode == PrimaryUiMode.None)
+        {
+            if (@event.IsActionPressed(InputActionCatalog.Get(GameAction.RotateBuilding).InputMapAction))
+            {
+                _factory.RotatePlacement(1);
+                GetViewport().SetInputAsHandled();
+                return;
+            }
+
+            if (@event.IsActionPressed("build_menu"))
             {
                 _factory.CancelPlacement();
-                _resourceHud.ShowMessage("Platzierung abgebrochen");
+                SetPrimaryUiMode(PrimaryUiMode.BuildMenu);
                 GetViewport().SetInputAsHandled();
                 return;
             }
@@ -350,7 +515,10 @@ public partial class GameRoot : Node
                 switch (placementMouse.ButtonIndex)
                 {
                     case MouseButton.Left:
-                        _factory.TryPlaceSelectedMachineAtViewportPosition(placementMouse.Position);
+                        if (_factory.TryPlaceSelectedMachineAtViewportPosition(placementMouse.Position))
+                        {
+                            RefreshHotbarAndEquipment();
+                        }
                         GetViewport().SetInputAsHandled();
                         return;
                     case MouseButton.Right:
@@ -358,16 +526,28 @@ public partial class GameRoot : Node
                         _resourceHud.ShowMessage("Platzierung abgebrochen");
                         GetViewport().SetInputAsHandled();
                         return;
-                    case MouseButton.WheelUp:
-                        _factory.RotatePlacement(1);
-                        GetViewport().SetInputAsHandled();
-                        return;
-                    case MouseButton.WheelDown:
-                        _factory.RotatePlacement(-1);
-                        GetViewport().SetInputAsHandled();
-                        return;
                 }
             }
+        }
+
+        if (_controlMode == PlayerControlMode.OnFoot &&
+            _primaryUiMode == PrimaryUiMode.None &&
+            !_factory.IsPlacementActive &&
+            GetActiveToolItemId() == ProductionItemIds.MachineDismantlingTool &&
+            @event.IsActionPressed(InputActionCatalog.Get(GameAction.UseMiningTool).InputMapAction))
+        {
+            if (_factory.TryBeginDismantlingAtViewportPosition(
+                    @event is InputEventMouseButton dismantleMouse
+                        ? dismantleMouse.Position
+                        : GetViewport().GetMousePosition(),
+                    _onFootPlayer.GlobalPosition,
+                    ProductionItemIds.MachineDismantlingTool))
+            {
+                UpdateDismantlingVisual();
+            }
+
+            GetViewport().SetInputAsHandled();
+            return;
         }
 
         if (@event.IsActionPressed("build_menu"))
@@ -416,20 +596,6 @@ public partial class GameRoot : Node
             return;
         }
 
-        if (@event.IsActionPressed("pause") || IsEscapePress(@event))
-        {
-            SetPrimaryUiMode(
-                _primaryUiMode is PrimaryUiMode.Inventory or
-                    PrimaryUiMode.Map or
-                    PrimaryUiMode.BuildMenu or
-                    PrimaryUiMode.MachinePanel or
-                    PrimaryUiMode.PowerMenu
-                    ? PrimaryUiMode.None
-                    : PrimaryUiMode.PauseMenu);
-            GetViewport().SetInputAsHandled();
-            return;
-        }
-
         if (@event.IsActionPressed("ship_docking") &&
             _controlMode == PlayerControlMode.Ship &&
             _primaryUiMode == PrimaryUiMode.None)
@@ -446,6 +612,10 @@ public partial class GameRoot : Node
 
         if (@event.IsActionPressed("ship_interaction") && _primaryUiMode == PrimaryUiMode.None)
         {
+            if (_controlMode == PlayerControlMode.Ship)
+            {
+                RefreshDockingAvailability(force: true);
+            }
             RefreshShipInteractionState();
             if (_availableShipInteraction != ShipInteractionAction.None ||
                 _availableMachineInteraction is not null ||
@@ -556,6 +726,10 @@ public partial class GameRoot : Node
         }
 
         _explorationMap.Scan(content);
+        _factory.SynchronizeResourceDiscoveries(
+            content.ResourceDepositsByComet.Values
+                .SelectMany(deposits => deposits)
+                .Select(deposit => deposit.ResourceId));
         foreach (var deposit in content.ResourceDepositsByComet.Values.SelectMany(deposits => deposits))
         {
             if (_resourceStateStore.GetRemainingAmount(deposit) <= 0)
@@ -684,10 +858,9 @@ public partial class GameRoot : Node
             return;
         }
 
-        var safePosition = FindSafeExitPosition();
+        var safePosition = _availableSafeExitPosition;
         if (safePosition is null)
         {
-            _resourceHud.ShowMessage("Kein sicherer Platz zum Aussteigen");
             return;
         }
 
@@ -746,6 +919,11 @@ public partial class GameRoot : Node
 
         _dockingCheckElapsed = 0;
         _availableDockingComet = null;
+        _availableSafeExitPosition = _controlMode == PlayerControlMode.Ship &&
+                                     _ship.IsControlActive &&
+                                     _primaryUiMode == PrimaryUiMode.None
+            ? FindSafeExitPosition()
+            : null;
         ShipDockingCandidate? candidate = null;
         var maySearch = _controlMode == PlayerControlMode.Ship &&
             _ship.IsControlActive &&
@@ -769,6 +947,14 @@ public partial class GameRoot : Node
             _ship.DockingState,
             _availableDockingContext,
             _dockingConfiguration);
+        if (_availableDockingDecision.Action == ShipDockingAction.Detach &&
+            _factory.HasShipPowerConnections)
+        {
+            // Keep the contextual hint and H action on the exact same effective decision.
+            // A cabled ship must first disconnect its live networks before detaching.
+            _availableDockingDecision = ShipDockingDecision.Blocked(
+                ShipDockingBlockReason.ActivePowerConnections);
+        }
     }
 
     private bool TryFindDockingCandidate(
@@ -842,7 +1028,9 @@ public partial class GameRoot : Node
         {
             Shape = new RectangleShape2D { Size = PlayerShipController.DockingClearanceSize },
             Transform = new Transform2D(attachmentRotation, attachmentPosition),
-            CollisionMask = 1u | ResourceDepositView.ResourceCollisionLayer,
+            CollisionMask = 1u |
+                            ResourceDepositView.ResourceCollisionLayer |
+                            MachineView.MachineCollisionLayer,
             CollideWithAreas = true,
             CollideWithBodies = true,
             Exclude = new Godot.Collections.Array<Rid> { _ship.GetRid() },
@@ -946,6 +1134,7 @@ public partial class GameRoot : Node
         }
 
         _resourceHud.SetShipFuel(_ship.FuelTank.CurrentFuel, mode == PlayerControlMode.Ship);
+        UpdateHotbarVisibility();
     }
 
     private void RefreshShipInteractionState(bool forcePromptUpdate = false)
@@ -958,6 +1147,10 @@ public partial class GameRoot : Node
             new WorldPosition(_onFootPlayer.GlobalPosition.X, _onFootPlayer.GlobalPosition.Y),
             new WorldPosition(_ship.CockpitEntryPosition.X, _ship.CockpitEntryPosition.Y),
             _ship.CockpitEntryRadius);
+        if (availableAction == ShipInteractionAction.ExitShip && _availableSafeExitPosition is null)
+        {
+            availableAction = ShipInteractionAction.None;
+        }
         MachineState? availableMachine = null;
         PowerInteractionTarget? availablePower = null;
         if (_controlMode == PlayerControlMode.OnFoot && !_onFootPlayer.IsMining && !inputBlocked)
@@ -1013,38 +1206,34 @@ public partial class GameRoot : Node
         _displayedMachineInteractionId = machineId;
         _displayedPowerInteraction = availablePower;
         _displayedDockingAction = dockingAction;
-        var prompts = new List<string>();
         var interactionBinding = InputBindingFormatter.FormatAction("ship_interaction");
-        var interactionPrompt = availableAction switch
-        {
-            ShipInteractionAction.EnterShip => $"{interactionBinding} – Einsteigen",
-            ShipInteractionAction.ExitShip => $"{interactionBinding} – Aussteigen",
-            _ => null,
-        };
-        if (interactionPrompt is not null)
-        {
-            prompts.Add(interactionPrompt);
-        }
-
-        else if (availablePower is not null)
-        {
-            prompts.Add($"{interactionBinding} – Stromnetz öffnen");
-        }
-
-        else if (availableMachine is not null)
-        {
-            prompts.Add($"{interactionBinding} – Maschine öffnen");
-        }
-
+        string? prompt;
         if (dockingAction != ShipDockingAction.None)
         {
             var dockingBinding = InputBindingFormatter.FormatAction("ship_docking");
-            prompts.Add(dockingAction == ShipDockingAction.Attach
+            prompt = dockingAction == ShipDockingAction.Attach
                 ? $"{dockingBinding} – Am Kometen befestigen"
-                : $"{dockingBinding} – Vom Kometen lösen");
+                : $"{dockingBinding} – Vom Kometen lösen";
+        }
+        else if (availablePower is not null)
+        {
+            prompt = $"{interactionBinding} – Stromnetz öffnen";
+        }
+        else if (availableMachine is not null)
+        {
+            prompt = $"{interactionBinding} – Maschine öffnen";
+        }
+        else
+        {
+            prompt = availableAction switch
+            {
+                ShipInteractionAction.EnterShip => $"{interactionBinding} – Einsteigen",
+                ShipInteractionAction.ExitShip => $"{interactionBinding} – Aussteigen",
+                _ => null,
+            };
         }
 
-        _resourceHud.SetInteractionPrompt(prompts.Count == 0 ? null : string.Join("\n", prompts));
+        _resourceHud.SetInteractionPrompt(prompt);
     }
 
     private void SetPrimaryUiMode(PrimaryUiMode mode)
@@ -1052,6 +1241,11 @@ public partial class GameRoot : Node
         if (_primaryUiMode == mode)
         {
             return;
+        }
+
+        if (mode != PrimaryUiMode.None)
+        {
+            CancelActiveDismantling();
         }
 
         if (mode == PrimaryUiMode.Map && _controlMode != PlayerControlMode.Ship)
@@ -1088,6 +1282,12 @@ public partial class GameRoot : Node
         _shipDockingPressGate.SuppressUntilReleased();
         _onFootPlayer.InterruptCurrentAction();
 
+        if (previousMode == PrimaryUiMode.PauseMenu && mode != PrimaryUiMode.PauseMenu)
+        {
+            _settingsMenu.CloseImmediately();
+            _infoMenu.CloseImmediately();
+        }
+
         if (previousMode == PrimaryUiMode.Inventory)
         {
             if (mode == PrimaryUiMode.None)
@@ -1098,6 +1298,8 @@ public partial class GameRoot : Node
             {
                 _inventoryMenu.CloseImmediately();
             }
+
+            _inventoryStorageTarget = null;
         }
         else if (mode != PrimaryUiMode.Inventory && _inventoryMenu.IsOpen)
         {
@@ -1168,7 +1370,15 @@ public partial class GameRoot : Node
                 break;
             case PrimaryUiMode.Inventory:
                 GetTree().Paused = false;
-                if (_controlMode == PlayerControlMode.Ship)
+                if (_inventoryStorageTarget is { } storage)
+                {
+                    _onFootPlayer.StopMovementImmediately();
+                    _inventoryMenu.OpenStorageInventory(
+                        storage.InputInventory,
+                        storage.Definition.DisplayName.ToUpperInvariant(),
+                        itemId => MachineInventoryAcceptanceRules.CanStore(storage.Definition, itemId));
+                }
+                else if (_controlMode == PlayerControlMode.Ship)
                 {
                     _inventoryMenu.OpenShipInventory();
                 }
@@ -1212,6 +1422,7 @@ public partial class GameRoot : Node
                 break;
             case PrimaryUiMode.PauseMenu:
                 GetTree().Paused = true;
+                _infoMenu.CloseImmediately();
                 _settingsMenu.Open();
                 break;
             default:
@@ -1220,6 +1431,7 @@ public partial class GameRoot : Node
 
         RefreshDockingAvailability(force: true);
         RefreshShipInteractionState(forcePromptUpdate: true);
+        UpdateHotbarVisibility();
     }
 
     private void HandleInventoryClosed()
@@ -1229,7 +1441,208 @@ public partial class GameRoot : Node
             _primaryUiMode = PrimaryUiMode.None;
         }
 
+        _inventoryStorageTarget = null;
         RefreshShipInteractionState(forcePromptUpdate: true);
+        UpdateHotbarVisibility();
+    }
+
+    private void HandleInventoryChanged()
+    {
+        RefreshHotbarAndEquipment();
+        _factory.MarkInventoryChanged();
+    }
+
+    private void HandleWorldDropRequested(InventorySlotAddress source, Vector2 screenPosition)
+    {
+        if (source.InventoryId == InventoryMenuController.StorageInventoryId &&
+            _inventoryStorageTarget is { } storage)
+        {
+            source = new InventorySlotAddress(
+                $"machine_input:{storage.InstanceId.Value}",
+                source.SlotIndex);
+        }
+
+        var worldPosition = GetViewport().GetCanvasTransform().AffineInverse() * screenPosition;
+        if (_factory.TryDropInventoryStack(source, worldPosition))
+        {
+            RefreshHotbarAndEquipment();
+            RefreshMachinePanel();
+            _inventoryMenu.Refresh();
+        }
+    }
+
+    private void HandleHotbarSlotSelected(int slotIndex) => SelectHotbarSlot(slotIndex);
+
+    private void HandleHotbarContextActionRequested(
+        InventoryItemContextAction action,
+        InventoryItemContextRequest request) =>
+        _inventoryMenu.ExecuteHotbarContextAction(action, request);
+
+    private void HandleInventoryHotbarActivationRequested(int slotIndex)
+    {
+        if (_primaryUiMode == PrimaryUiMode.Inventory)
+        {
+            SetPrimaryUiMode(PrimaryUiMode.None);
+        }
+
+        SelectHotbarSlot(slotIndex);
+    }
+
+    private void HandleInventoryToolActivationRequested(int slotIndex)
+    {
+        if (_primaryUiMode == PrimaryUiMode.Inventory)
+        {
+            SetPrimaryUiMode(PrimaryUiMode.None);
+        }
+
+        _toolInventoryState.SelectSlot(slotIndex);
+        ActivateHandSlot();
+    }
+
+    private void SelectHotbarSlot(int slotIndex)
+    {
+        CancelActiveDismantling();
+        _toolInventoryState.DeactivateHandMode();
+        var changed = _hotbarState.SelectSlot(slotIndex);
+        if (changed && _factory.IsPlacementActive)
+        {
+            _factory.CancelPlacement();
+        }
+
+        RefreshHotbarAndEquipment();
+        _factory.MarkInventoryChanged();
+        if (!_factory.IsPlacementActive &&
+            _controlMode == PlayerControlMode.OnFoot &&
+            _primaryUiMode == PrimaryUiMode.None &&
+            _hotbarState.ActiveItemId is { } itemId)
+        {
+            _factory.StartPlacementFromHotbarSlot(slotIndex, itemId);
+        }
+    }
+
+    private void SelectRelativeHotbar(int direction)
+    {
+        const int handSelectionIndex = InventoryConfiguration.HotbarSlotCount;
+        var current = _toolInventoryState.IsHandModeActive
+            ? handSelectionIndex
+            : _hotbarState.ActiveSlotIndex;
+        var selectionCount = InventoryConfiguration.HotbarSlotCount + 1;
+        var next = (current + direction + selectionCount) % selectionCount;
+        if (next == handSelectionIndex)
+        {
+            ActivateHandSlot();
+            return;
+        }
+
+        SelectHotbarSlot(next);
+    }
+
+    private void ActivateHandSlot()
+    {
+        CancelActiveDismantling();
+        _factory.CancelPlacement();
+        _toolInventoryState.ActivateHandMode();
+        RefreshHotbarAndEquipment();
+        _factory.MarkInventoryChanged();
+    }
+
+    private void SelectRelativeTool(bool previous)
+    {
+        CancelActiveDismantling();
+        var changed = previous
+            ? _toolInventoryState.SelectPreviousTool()
+            : _toolInventoryState.SelectNextTool();
+        if (!changed)
+        {
+            return;
+        }
+
+        RefreshHotbarAndEquipment();
+        _factory.MarkInventoryChanged();
+    }
+
+    private void RestoreActiveHotbarSlot(int slotIndex)
+    {
+        _hotbarState.SelectSlot(slotIndex);
+        RefreshHotbarAndEquipment();
+    }
+
+    private void RefreshHotbarAndEquipment()
+    {
+        if (GodotObject.IsInstanceValid(_hotbar))
+        {
+            _hotbar.Refresh();
+        }
+
+        if (GodotObject.IsInstanceValid(_inventoryMenu))
+        {
+            _inventoryMenu.SetActiveHotbarSlot(_hotbarState.ActiveSlotIndex);
+            _inventoryMenu.Refresh();
+        }
+
+        if (GodotObject.IsInstanceValid(_onFootPlayer))
+        {
+            _onFootPlayer.SetActiveTool(GetActiveToolItemId());
+        }
+    }
+
+    private ItemId? GetActiveToolItemId() => _toolInventoryState.EquippedToolId;
+
+    private void UpdateDismantlingInteraction(double deltaSeconds)
+    {
+        if (!_factory.IsDismantling)
+        {
+            _onFootPlayer.ClearDismantlingEffect();
+            return;
+        }
+
+        var validGameplayState = _controlMode == PlayerControlMode.OnFoot &&
+                                 _primaryUiMode == PrimaryUiMode.None &&
+                                 !_factory.IsPlacementActive;
+        var completed = _factory.AdvanceDismantling(
+            deltaSeconds,
+            GetViewport().GetMousePosition(),
+            _onFootPlayer.GlobalPosition,
+            validGameplayState ? GetActiveToolItemId() : null,
+            validGameplayState && Input.IsActionPressed(
+                InputActionCatalog.Get(GameAction.UseMiningTool).InputMapAction));
+        if (completed)
+        {
+            RefreshHotbarAndEquipment();
+        }
+
+        UpdateDismantlingVisual();
+    }
+
+    private void UpdateDismantlingVisual()
+    {
+        if (_factory.IsDismantling &&
+            _factory.DismantlingTargetWorldPosition is { } targetPosition)
+        {
+            _onFootPlayer.SetDismantlingEffect(targetPosition, _factory.DismantlingProgress);
+            return;
+        }
+
+        _onFootPlayer.ClearDismantlingEffect();
+    }
+
+    private void CancelActiveDismantling()
+    {
+        _factory.CancelDismantling();
+        if (GodotObject.IsInstanceValid(_onFootPlayer))
+        {
+            _onFootPlayer.ClearDismantlingEffect();
+        }
+    }
+
+    private void UpdateHotbarVisibility()
+    {
+        if (GodotObject.IsInstanceValid(_hotbar))
+        {
+            _hotbar.SetGameplayVisible(
+                _controlMode == PlayerControlMode.OnFoot &&
+                _primaryUiMode == PrimaryUiMode.None);
+        }
     }
 
     private void HandleBuildMachineSelected(string machineId)
@@ -1250,12 +1663,20 @@ public partial class GameRoot : Node
         }
 
         RefreshShipInteractionState(forcePromptUpdate: true);
+        UpdateHotbarVisibility();
     }
 
     private void OpenMachinePanel(MachineState machine)
     {
         if (_controlMode != PlayerControlMode.OnFoot || _primaryUiMode != PrimaryUiMode.None)
         {
+            return;
+        }
+
+        if (machine.Definition.Kind == MachineKind.Storage)
+        {
+            _inventoryStorageTarget = machine;
+            SetPrimaryUiMode(PrimaryUiMode.Inventory);
             return;
         }
 
@@ -1383,9 +1804,26 @@ public partial class GameRoot : Node
         _inventoryMenu.Refresh();
     }
 
+    private void HandleGeneratorTankFillRequested()
+    {
+        _factory.FillOpenGeneratorTank();
+        RefreshMachinePanel();
+    }
+
+    private void HandleGeneratorTankDrainRequested()
+    {
+        _factory.DrainOpenGeneratorTank();
+        RefreshMachinePanel();
+    }
+
     private void HandleFactoryStateChanged()
     {
         RefreshMachinePanel();
+        if (_primaryUiMode == PrimaryUiMode.Inventory &&
+            _inventoryStorageTarget is not null && _inventoryMenu.IsOpen)
+        {
+            _inventoryMenu.Refresh();
+        }
     }
 
     private void HandleBuildCatalogChanged()
@@ -1413,32 +1851,68 @@ public partial class GameRoot : Node
     private void RefreshBuildMenuCatalog() =>
         _buildMenu.SetMachineCatalog(_factory.CreateBuildMenuViewModels());
 
-    private void HandleRefuelRequested()
+    private void HandleShipFuelTransferRequested(
+        InventoryMenuController.ShipFuelTransferDirection direction,
+        InventorySlotAddress address)
     {
         if (_controlMode != PlayerControlMode.Ship || !_inventoryMenu.IsShipStorageVisible)
         {
             return;
         }
 
-        var result = ShipRefuelService.TransferFilledContainers(_ship.FuelTank, _shipInventory);
+        var containerInventory = address.InventoryId switch
+        {
+            InventoryMenuController.AstronautInventoryId => _astronautInventory,
+            InventoryMenuController.ShipInventoryId => _shipInventory,
+            _ => null,
+        };
+        if (containerInventory is null ||
+            address.SlotIndex < 0 || address.SlotIndex >= containerInventory.SlotCount)
+        {
+            _inventoryMenu.ShowExternalStatus("Kein passender Behälter", succeeded: false);
+            return;
+        }
+
+        var result = direction == InventoryMenuController.ShipFuelTransferDirection.Fill
+            ? ShipRefuelService.TransferFilledContainerFromSlot(
+                _ship.FuelTank, containerInventory, address.SlotIndex)
+            : ShipRefuelService.TransferTankToContainerInSlot(
+                _ship.FuelTank, containerInventory, address.SlotIndex);
         var message = result.Succeeded
-            ? $"{result.TransferredContainerCount} Treibstoffbehälter in den Tank übertragen"
+            ? direction == InventoryMenuController.ShipFuelTransferDirection.Fill
+                ? "Tank aufgef\u00fcllt"
+                : "Tank geleert"
             : result.Failure switch
             {
-                ShipRefuelFailure.NoFilledFuelContainers => "Keine gefüllten Treibstoffbehälter im Raumschifflager",
-                ShipRefuelFailure.TankCannotFitFullContainer => "Tank hat keinen Platz für einen vollen Behälter",
-                ShipRefuelFailure.NoSpaceForReturnedContainers => "Kein Platz für leere Behälter",
-                _ => "Betanken nicht möglich",
+                ShipRefuelFailure.TankCannotFitFullContainer => "Tank voll",
+                ShipRefuelFailure.TankEmpty => "Tank leer",
+                ShipRefuelFailure.TankContainsDifferentFuel or
+                    ShipRefuelFailure.SelectedSlotDoesNotContainFuel => "Falscher Inhalt",
+                ShipRefuelFailure.SelectedSlotDoesNotContainEmptyContainer => "Kein passender Beh\u00e4lter",
+                ShipRefuelFailure.TankCannotFillContainer => "Zu wenig Treibstoff",
+                ShipRefuelFailure.NoSpaceForReturnedContainers => "Kein Platz im Inventar",
+                _ => "Transfer nicht m\u00f6glich",
             };
         _inventoryMenu.ShowExternalStatus(message, result.Succeeded);
         if (result.Succeeded)
         {
             _factory.MarkFuelChanged();
+            _factory.MarkInventoryChanged();
             _inventoryMenu.Refresh();
         }
 
-        _inventoryMenu.SetFuelTankState(_ship.FuelTank.CurrentFuel, _ship.FuelTank.Capacity);
+        RefreshShipFuelInventoryUi();
         _resourceHud.SetShipFuel(_ship.FuelTank.CurrentFuel, visible: true);
+    }
+
+    private void RefreshShipFuelInventoryUi()
+    {
+        _inventoryMenu.SetFuelTankState(
+            _ship.FuelTank.CurrentFuel,
+            _ship.FuelTank.Capacity,
+            _ship.FuelTank.CurrentFuelType,
+            _ship.FuelTank.RemainingBoostSeconds,
+            _ship.FuelTank.BoostSpeedMultiplier);
     }
 
     private void HandleBoostFuelUnavailable() => _resourceHud.ShowMessage("Kein Treibstoff");
@@ -1455,6 +1929,7 @@ public partial class GameRoot : Node
         {
             _primaryUiMode = PrimaryUiMode.None;
             RefreshShipInteractionState(forcePromptUpdate: true);
+            UpdateHotbarVisibility();
         }
     }
 
@@ -1476,6 +1951,26 @@ public partial class GameRoot : Node
 
         GetTree().Paused = false;
         RefreshShipInteractionState();
+        UpdateHotbarVisibility();
+    }
+
+    private void HandleInfoRequested()
+    {
+        if (_primaryUiMode != PrimaryUiMode.PauseMenu)
+        {
+            return;
+        }
+
+        _settingsMenu.CloseImmediately();
+        _infoMenu.Open();
+    }
+
+    private void HandleInfoBackRequested()
+    {
+        if (_primaryUiMode == PrimaryUiMode.PauseMenu)
+        {
+            _settingsMenu.Open();
+        }
     }
 
     private void HandleInputBindingsChanged()
@@ -1484,6 +1979,7 @@ public partial class GameRoot : Node
         _shipDockingPressGate.Reset();
         _worldMap.RefreshBinding();
         _buildMenu.SetBuildActionLabel(InputBindingFormatter.FormatAction("build_menu"));
+        RefreshHotbarAndEquipment();
         RefreshShipInteractionState(forcePromptUpdate: true);
     }
 
@@ -1522,9 +2018,19 @@ public partial class GameRoot : Node
         try
         {
         _inventoryMenu.RunConstructionSmokeTest();
+        _hotbar.RunConstructionSmokeTest();
         _buildMenu.RunConstructionSmokeTest();
         _machinePanel.RunConstructionSmokeTest();
+        _powerMenu.RunLayoutSmokeTest();
         var defaultFactoryState = FactoryStateData.CreateDefault();
+        var hasConfiguredHighPerformanceTestCargo = defaultFactoryState.ShipInventory.Any(slot =>
+            slot.ItemId == ShipFuelConfiguration.HighPerformanceTestCargo.ItemId.Value &&
+            slot.Amount == ShipFuelConfiguration.HighPerformanceTestCargo.Amount);
+        var highPerformanceTestCargoMatchesConfiguration =
+            ShipFuelConfiguration.IncludeHighPerformanceTestTankInNewGame
+                ? hasConfiguredHighPerformanceTestCargo
+                : !defaultFactoryState.ShipInventory.Any(slot =>
+                    slot.ItemId == ShipFuelConfiguration.HighPerformanceTestCargo.ItemId.Value);
         RequireSmokeCondition(
             defaultFactoryState.ShipInventory.Any(slot =>
                 slot.ItemId == ProductionItemIds.PowerCable.Value &&
@@ -1534,16 +2040,45 @@ public partial class GameRoot : Node
                 slot.Amount == LogisticsConfiguration.StartingConveyorBeltCount) &&
             defaultFactoryState.ShipInventory.Any(slot =>
                 slot.ItemId == ProductionItemIds.TransportPipe.Value &&
-                slot.Amount == LogisticsConfiguration.StartingTransportPipeCount),
-            "A new ship must contain five cables, five conveyor belts and five transport pipes.");
+                slot.Amount == LogisticsConfiguration.StartingTransportPipeCount) &&
+            highPerformanceTestCargoMatchesConfiguration &&
+            defaultFactoryState.ShipFuelType == ShipFuelType.Standard &&
+            Math.Abs(defaultFactoryState.ShipFuel - ShipFuelConfiguration.TankCapacity) < 0.001 &&
+            defaultFactoryState.HotbarInventory.Count == 0 &&
+            defaultFactoryState.AstronautInventory.Count == 0 &&
+            defaultFactoryState.ToolInventory.SequenceEqual(new[]
+            {
+                new InventorySlotState(0, ProductionItemIds.MiningTool.Value, 1),
+                new InventorySlotState(1, ProductionItemIds.MachineDismantlingTool.Value, 1),
+            }) &&
+            defaultFactoryState.SelectedToolSlotIndex == 0 && defaultFactoryState.IsHandModeActive,
+            "A new game must contain the connection kit, both dedicated tools and the configured fuel cargo.");
         var persistedJson = FactoryStateJsonCodec.Serialize(defaultFactoryState);
         RequireSmokeCondition(
             FactoryStateJsonCodec.TryDeserialize(persistedJson, out var restoredFactoryState, out _) &&
             restoredFactoryState.Version == FactoryStateData.CurrentVersion,
             "The factory persistence codec must round-trip a valid state.");
+        var multipleMiningToolsState = defaultFactoryState with
+        {
+            ToolInventory = defaultFactoryState.ToolInventory
+                .Append(new InventorySlotState(2, ProductionItemIds.MiningTool.Value, 1))
+                .ToArray(),
+        };
+        var multipleMiningToolsJson = FactoryStateJsonCodec.Serialize(multipleMiningToolsState);
+        RequireSmokeCondition(
+            FactoryStateJsonCodec.TryDeserialize(
+                multipleMiningToolsJson,
+                out var restoredMultipleMiningToolsState,
+                out _) &&
+            restoredMultipleMiningToolsState.ToolInventory.Count(slot =>
+                slot.ItemId == ProductionItemIds.MiningTool.Value) == 2,
+            "Persistence must accept multiple independently crafted non-stackable mining tools.");
         GD.Print("FACTORY_PERSISTENCE_ROUNDTRIP_OK: versioned machine/research/fuel snapshot");
-        GD.Print("STARTER_CONNECTION_KIT_OK: 5 power cables, 5 conveyor belts, 5 transport pipes");
+        GD.Print($"STARTER_CONNECTION_KIT_OK: {LogisticsConfiguration.StartingPowerCableCount} power cables, " +
+                 $"{LogisticsConfiguration.StartingConveyorBeltCount} conveyor belts, " +
+                 $"{LogisticsConfiguration.StartingTransportPipeCount} transport pipes");
         _factory.RunPowerCablePresentationSmokeTest();
+        _factory.DebugRunDroppedItemRuntimeSmokeTest();
 
         SetControlMode(PlayerControlMode.Ship);
         _Input(new InputEventAction { Action = "build_menu", Pressed = true });
@@ -1553,8 +2088,10 @@ public partial class GameRoot : Node
         _Input(new InputEventAction { Action = "inventory", Pressed = true });
         RequireSmokeCondition(
             _inventoryMenu.IsOpen && _inventoryMenu.IsShipStorageVisible &&
+            _inventoryMenu.IsPersonalInventoryVisible &&
+            !_inventoryMenu.IsEmbeddedHotbarVisible &&
             _primaryUiMode == PrimaryUiMode.Inventory && !GetTree().Paused,
-            "Ship mode must open both inventories without pausing gameplay.");
+            "Ship mode must open astronaut inventory and 56-slot cargo side by side without the hotbar.");
         var shipModeBeforeBlockedInteraction = _controlMode;
         _Input(new InputEventAction { Action = "ship_interaction", Pressed = true });
         RequireSmokeCondition(
@@ -1581,6 +2118,87 @@ public partial class GameRoot : Node
         _Input(new InputEventAction { Action = "open_map", Pressed = true });
 
         SetControlMode(PlayerControlMode.OnFoot);
+        RequireSmokeCondition(_hotbar.Visible, "The six-slot hotbar must be visible while controlling the astronaut.");
+        RequireSmokeCondition(
+            _toolInventoryState.IsHandModeActive && _onFootPlayer.IsMiningToolEquipped,
+            "A new astronaut must start in hand mode with the mining tool selected.");
+        var secondHotbarAction = InputActionCatalog.Get(InputActionCatalog.HotbarActions[1]).InputMapAction;
+        _Input(new InputEventAction { Action = secondHotbarAction, Pressed = true });
+        RequireSmokeCondition(
+            _hotbarState.ActiveSlotIndex == 1 && !_toolInventoryState.IsHandModeActive &&
+            !_onFootPlayer.IsMiningToolEquipped,
+            "Selecting a normal hotbar slot must leave hand mode and unequip the mining tool.");
+        _Input(new InputEventAction
+        {
+            Action = InputActionCatalog.Get(GameAction.ActivateHandSlot).InputMapAction,
+            Pressed = true,
+        });
+        RequireSmokeCondition(
+            _toolInventoryState.IsHandModeActive && _onFootPlayer.IsMiningToolEquipped,
+            "The configurable hand action must equip the selected dedicated tool.");
+        _Input(new InputEventAction
+        {
+            Action = InputActionCatalog.Get(GameAction.NextTool).InputMapAction,
+            Pressed = true,
+        });
+        RequireSmokeCondition(
+            _toolInventoryState.SelectedSlotIndex == 1 && !_onFootPlayer.IsMiningToolEquipped,
+            "The configurable next-tool action must cycle to the dismantling tool.");
+        _Input(new InputEventAction
+        {
+            Action = InputActionCatalog.Get(GameAction.PreviousTool).InputMapAction,
+            Pressed = true,
+        });
+        RequireSmokeCondition(
+            _toolInventoryState.SelectedSlotIndex == 0 && _onFootPlayer.IsMiningToolEquipped,
+            "The configurable previous-tool action must cycle back to the mining tool.");
+        _inventoryMenu.SetSelectedToolSlot(1);
+        RequireSmokeCondition(
+            _toolInventoryState.SelectedSlotIndex == 1 &&
+            _toolInventoryState.IsHandModeActive &&
+            _onFootPlayer.IsDismantlingToolEquipped,
+            "Selecting a tool inventory slot must synchronously update the equipped hand tool.");
+        _inventoryMenu.SetSelectedToolSlot(0);
+        RequireSmokeCondition(
+            _toolInventoryState.SelectedSlotIndex == 0 && _onFootPlayer.IsMiningToolEquipped,
+            "Selecting the mining-tool slot must synchronously restore the equipped mining tool.");
+
+        // Build-menu previews retain their selected object when the regular wheel is used.
+        // Physical hotbar placement still participates in the normal wheel cycle.
+        _factory.StartPlacement(MachineDefinitionIds.BasicGenerator.Value);
+        RequireSmokeCondition(
+            _factory.IsPlacementActive && IsGameplayInputBlocked() && !IsMovementInputBlocked(),
+            "Placement must block mining and interactions while keeping astronaut movement active.");
+        _Input(new InputEventMouseButton
+        {
+            ButtonIndex = MouseButton.WheelDown,
+            Pressed = true,
+            Position = new Vector2(10, 10),
+        });
+        RequireSmokeCondition(
+            _factory.IsPlacementActive && !_factory.IsHotbarPlacementActive &&
+            _toolInventoryState.IsHandModeActive,
+            "The wheel must not replace a build-menu object with a hotbar selection.");
+        _factory.CancelPlacement();
+        _Input(new InputEventMouseButton
+        {
+            ButtonIndex = MouseButton.WheelDown,
+            Pressed = true,
+            Position = new Vector2(10, 10),
+        });
+        RequireSmokeCondition(
+            !_factory.IsPlacementActive && !_toolInventoryState.IsHandModeActive,
+            "The regular wheel cycle must continue to a normal hotbar slot outside build-menu placement.");
+        _Input(new InputEventMouseButton
+        {
+            ButtonIndex = MouseButton.WheelUp,
+            Pressed = true,
+            Position = new Vector2(10, 10),
+        });
+        RequireSmokeCondition(
+            _toolInventoryState.IsHandModeActive,
+            "The mouse-wheel selection cycle must include the dedicated hand slot.");
+
         _Input(new InputEventAction { Action = "build_menu", Pressed = true });
         RequireSmokeCondition(
             _buildMenu.IsOpen && _primaryUiMode == PrimaryUiMode.BuildMenu && !GetTree().Paused,
@@ -1593,13 +2211,29 @@ public partial class GameRoot : Node
         _Input(new InputEventAction { Action = "inventory", Pressed = true });
         RequireSmokeCondition(
             _inventoryMenu.IsOpen && !_inventoryMenu.IsShipStorageVisible &&
+            _inventoryMenu.IsPersonalInventoryVisible && _inventoryMenu.IsEmbeddedHotbarVisible &&
+            !_hotbar.Visible &&
             _primaryUiMode == PrimaryUiMode.Inventory && !GetTree().Paused,
-            "On-foot mode must expose only the astronaut inventory and block the astronaut without pausing the world.");
+            "On-foot mode must expose only the 24-slot inventory plus embedded hotbar.");
+        _Input(new InputEventAction { Action = "inventory", Pressed = true });
+        await ToSignal(GetTree().CreateTimer(0.2, processAlways: true), SceneTreeTimer.SignalName.Timeout);
+        RequireSmokeCondition(
+            !_inventoryMenu.IsOpen && _primaryUiMode == PrimaryUiMode.None && _hotbar.Visible,
+            "A second inventory action must close the personal inventory and restore the hotbar.");
+        _Input(new InputEventAction { Action = "inventory", Pressed = true });
         _Input(new InputEventKey { Keycode = Key.Escape, Pressed = true });
         await ToSignal(GetTree().CreateTimer(0.2, processAlways: true), SceneTreeTimer.SignalName.Timeout);
         RequireSmokeCondition(
             !_inventoryMenu.IsOpen && _primaryUiMode == PrimaryUiMode.None && !GetTree().Paused,
-            "Escape must close the astronaut inventory.");
+            "The first Escape from inventory must return to gameplay without opening pause.");
+        _Input(new InputEventKey { Keycode = Key.Escape, Pressed = true });
+        RequireSmokeCondition(
+            _primaryUiMode == PrimaryUiMode.PauseMenu && GetTree().Paused,
+            "A second Escape from gameplay must open the configured pause menu.");
+        _settingsMenu.NavigateBackOrClose();
+        RequireSmokeCondition(
+            _primaryUiMode == PrimaryUiMode.None && !GetTree().Paused && _hotbar.Visible,
+            "Closing pause must restore astronaut gameplay and the standalone hotbar.");
         _Input(new InputEventAction { Action = "open_map", Pressed = true });
         RequireSmokeCondition(
             !_worldMap.IsOpen && _primaryUiMode == PrimaryUiMode.None,
@@ -2020,10 +2654,19 @@ public partial class GameRoot : Node
     private void RunSettingsSmokeTest()
     {
         _settingsMenu.RunConstructionSmokeTest();
+        _infoMenu.RunConstructionSmokeTest();
         SetPrimaryUiMode(PrimaryUiMode.PauseMenu);
         RequireSmokeCondition(
             GetTree().Paused && _primaryUiMode == PrimaryUiMode.PauseMenu,
             "Only the pause/settings menu may pause the scene tree.");
+        HandleInfoRequested();
+        RequireSmokeCondition(
+            GetTree().Paused && _infoMenu.IsOpen && !_settingsMenu.IsOpen,
+            "Info must open from the pause menu without resuming gameplay.");
+        _infoMenu._Input(new InputEventAction { Action = "pause", Pressed = true });
+        RequireSmokeCondition(
+            GetTree().Paused && !_infoMenu.IsOpen && _settingsMenu.IsOpen,
+            "Escape from info must return to the still-paused settings main page.");
         _settingsMenu._Input(new InputEventAction { Action = "pause", Pressed = true });
         RequireSmokeCondition(
             !GetTree().Paused && _primaryUiMode == PrimaryUiMode.None,
@@ -2039,6 +2682,70 @@ public partial class GameRoot : Node
     }
 #endif
 
+    private static SlotInventory CreatePlayerInventory(int slotCount) => new(
+        slotCount,
+        InventoryConfiguration.MaximumStackSize,
+        ResolvePlayerItemStackSize);
+
+    private static int ResolvePlayerItemStackSize(ItemId itemId) =>
+        DefaultProductionItemCatalog.Instance.TryGet(itemId, out var item) && item is not null
+            ? item.MaximumStackSize
+            : InventoryConfiguration.MaximumStackSize;
+
+    private bool IsPointerOverInteractiveUi()
+    {
+        var hoveredControl = GetViewport().GuiGetHoveredControl();
+        if (hoveredControl is null)
+        {
+            return false;
+        }
+
+        Node[] worldInputBlockers =
+        [
+            _hotbar,
+            _worldMap,
+            _inventoryMenu,
+            _buildMenu,
+            _machinePanel,
+            _powerMenuLayer,
+            _settingsMenu,
+            _infoMenu,
+        ];
+        return worldInputBlockers.Any(node =>
+            GodotObject.IsInstanceValid(node) && node.IsAncestorOf(hoveredControl));
+    }
+
+    private bool CanSelectHotbarWithWheelOverHud(InputEventMouseButton pointerEvent)
+    {
+        if (pointerEvent.ButtonIndex is not (MouseButton.WheelUp or MouseButton.WheelDown) ||
+            _controlMode != PlayerControlMode.OnFoot ||
+            _primaryUiMode != PrimaryUiMode.None ||
+            !_settingsMenu.HotbarMouseWheelEnabled ||
+            !GodotObject.IsInstanceValid(_hotbar))
+        {
+            return false;
+        }
+
+        var hoveredControl = GetViewport().GuiGetHoveredControl();
+        return hoveredControl is not null && _hotbar.IsAncestorOf(hoveredControl);
+    }
+
+    private static bool TryGetPressedHotbarSlot(InputEvent @event, out int slotIndex)
+    {
+        for (var index = 0; index < InputActionCatalog.HotbarActions.Count; index++)
+        {
+            var inputAction = InputActionCatalog.Get(InputActionCatalog.HotbarActions[index]).InputMapAction;
+            if (@event.IsActionPressed(inputAction))
+            {
+                slotIndex = index;
+                return true;
+            }
+        }
+
+        slotIndex = -1;
+        return false;
+    }
+
     private static bool IsSingleActionPress(InputEvent @event) =>
         @event is not InputEventKey keyEvent || !keyEvent.Echo;
 
@@ -2047,6 +2754,16 @@ public partial class GameRoot : Node
         _factory.IsPlacementActive ||
         _worldMap.IsOpen ||
         _settingsMenu.IsOpen ||
+        _infoMenu.IsOpen ||
+        _inventoryMenu.IsOpen ||
+        _buildMenu.IsOpen ||
+        _machinePanel.IsOpen;
+
+    private bool IsMovementInputBlocked() =>
+        _primaryUiMode != PrimaryUiMode.None ||
+        _worldMap.IsOpen ||
+        _settingsMenu.IsOpen ||
+        _infoMenu.IsOpen ||
         _inventoryMenu.IsOpen ||
         _buildMenu.IsOpen ||
         _machinePanel.IsOpen;
@@ -2054,6 +2771,55 @@ public partial class GameRoot : Node
     private static bool IsEscapePress(InputEvent @event) =>
         @event is InputEventKey { Pressed: true, Echo: false } keyEvent &&
         (keyEvent.Keycode == Key.Escape || keyEvent.PhysicalKeycode == Key.Escape);
+
+    /// <summary>
+    /// Applies one central back-navigation order: transient child, current live
+    /// menu, placement, then pause. Pause/settings/info own their deeper page
+    /// hierarchy and therefore receive the input unchanged.
+    /// </summary>
+    private bool TryHandleMenuBackInput(InputEvent @event)
+    {
+        if (!IsEscapePress(@event) && !@event.IsActionPressed("pause"))
+        {
+            return false;
+        }
+
+        if (_primaryUiMode == PrimaryUiMode.PauseMenu)
+        {
+            return false;
+        }
+
+        var closedTransientUi = _hotbar.TryCloseTransientUi() || _primaryUiMode switch
+        {
+            PrimaryUiMode.Inventory => _inventoryMenu.TryCloseTransientUi(),
+            PrimaryUiMode.MachinePanel => _machinePanel.TryCloseTransientUi(),
+            _ => false,
+        };
+        if (closedTransientUi)
+        {
+            GetViewport().SetInputAsHandled();
+            return true;
+        }
+
+        if (_primaryUiMode != PrimaryUiMode.None)
+        {
+            SetPrimaryUiMode(PrimaryUiMode.None);
+            GetViewport().SetInputAsHandled();
+            return true;
+        }
+
+        if (_factory.IsPlacementActive)
+        {
+            _factory.CancelPlacement();
+            _resourceHud.ShowMessage("Platzierung abgebrochen");
+            GetViewport().SetInputAsHandled();
+            return true;
+        }
+
+        SetPrimaryUiMode(PrimaryUiMode.PauseMenu);
+        GetViewport().SetInputAsHandled();
+        return true;
+    }
 
     private Vector2? FindSafeExitPosition()
     {
@@ -2109,7 +2875,9 @@ public partial class GameRoot : Node
         {
             Shape = new CircleShape2D { Radius = astronautClearanceRadius },
             Transform = new Transform2D(0, candidate),
-            CollisionMask = 1u | ResourceDepositView.ResourceCollisionLayer,
+            CollisionMask = 1u |
+                            ResourceDepositView.ResourceCollisionLayer |
+                            MachineView.MachineCollisionLayer,
             CollideWithAreas = true,
             CollideWithBodies = true,
             Exclude = new Godot.Collections.Array<Rid> { _ship.GetRid() },

@@ -1,6 +1,8 @@
 using Godot;
 using SpaceFactory.Core.Common;
 using SpaceFactory.Core.Inventory;
+using SpaceFactory.Core.Items;
+using SpaceFactory.Core.Production;
 using SpaceFactory.Core.Player;
 using SpaceFactory.Core.World.Resources;
 using SpaceFactory.Presentation.UI;
@@ -31,12 +33,16 @@ public partial class OnFootPlayerController : CharacterBody2D
     private Area2D _cursorProbe = null!;
     private Sprite2D _astronautSprite = null!;
     private Node2D _miningTool = null!;
+    private Node2D _dismantlingTool = null!;
     private Marker2D _miningMuzzle = null!;
+    private Marker2D _dismantlingMuzzle = null!;
     private Vector2 _toolRestPosition;
+    private Vector2 _dismantlingToolRestPosition;
     private SlotInventory _inventory = null!;
     private IReadOnlyList<ResourceDefinition> _resources = [];
     private ResourceHud _hud = null!;
     private Func<bool> _isUiBlocking = static () => false;
+    private Func<bool> _isMovementBlocking = static () => false;
     private ResourceDepositView? _miningTarget;
     private readonly MiningSession _miningSession = new();
     private float _toolPulse;
@@ -45,8 +51,17 @@ public partial class OnFootPlayerController : CharacterBody2D
     private Vector2 _spriteRestScale;
     private Vector2 _inheritedDriftVelocity;
     private Tween? _visibilityTween;
+    private float _radiationMovementMultiplier = 1;
+    private float _radiationMiningMultiplier = 1;
+    private bool _dismantlingEffectActive;
+    private Vector2 _dismantlingTargetWorld;
+    private float _dismantlingProgress;
 
     public bool IsControlActive { get; private set; }
+    public bool IsMiningToolEquipped { get; private set; }
+    public bool IsDismantlingToolEquipped { get; private set; }
+    public ItemId? ActiveMiningToolId { get; private set; }
+    public MiningToolTier? ActiveMiningToolTier { get; private set; }
     public OnFootActionState ActionState { get; private set; } = OnFootActionState.Exploring;
     public bool IsMining => ActionState == OnFootActionState.Mining;
 
@@ -56,8 +71,13 @@ public partial class OnFootPlayerController : CharacterBody2D
         _spriteRestPosition = _astronautSprite.Position;
         _spriteRestScale = _astronautSprite.Scale;
         _miningTool = GetNode<Node2D>("MiningTool");
+        _dismantlingTool = GetNode<Node2D>("DismantlingTool");
         _miningMuzzle = GetNode<Marker2D>("MiningTool/Muzzle");
+        _dismantlingMuzzle = GetNode<Marker2D>("DismantlingTool/Muzzle");
         _toolRestPosition = _miningTool.Position;
+        _dismantlingToolRestPosition = _dismantlingTool.Position;
+        _miningTool.Visible = IsMiningToolEquipped;
+        _dismantlingTool.Visible = IsDismantlingToolEquipped;
         _cursorProbe = new Area2D
         {
             CollisionLayer = 0,
@@ -78,12 +98,14 @@ public partial class OnFootPlayerController : CharacterBody2D
         SlotInventory inventory,
         IReadOnlyList<ResourceDefinition> resources,
         ResourceHud hud,
-        Func<bool> isUiBlocking)
+        Func<bool> isUiBlocking,
+        Func<bool>? isMovementBlocking = null)
     {
         _inventory = inventory;
         _resources = resources;
         _hud = hud;
         _isUiBlocking = isUiBlocking;
+        _isMovementBlocking = isMovementBlocking ?? isUiBlocking;
         _hud.UpdateInventory(inventory, resources);
     }
 
@@ -103,12 +125,33 @@ public partial class OnFootPlayerController : CharacterBody2D
         if (uiBlocked)
         {
             CancelMining();
-            SlowToStop((float)delta);
+            ClearDismantlingEffect();
+            if (_isMovementBlocking())
+            {
+                SlowToStop((float)delta);
+            }
+            else
+            {
+                MoveNormally((float)delta);
+            }
             return;
         }
 
-        var miningRequested = Input.IsActionPressed("use_mining_tool");
-        if (target is not null && MiningInteractionRules.CanMine(
+        if (_dismantlingEffectActive && IsDismantlingToolEquipped)
+        {
+            CancelMining();
+            SlowToStop((float)delta);
+            var targetRotation = GlobalPosition.DirectionTo(_dismantlingTargetWorld).Angle() + Mathf.Pi / 2;
+            Rotation = Mathf.LerpAngle(Rotation, targetRotation, RotationSpeed * (float)delta);
+            UpdateDismantlingToolPose((float)delta);
+            QueueRedraw();
+            return;
+        }
+
+        var miningRequested = IsMiningToolEquipped && Input.IsActionPressed("use_mining_tool");
+        if (target is not null && ActiveMiningToolTier is { } toolTier &&
+            MiningToolRules.CanMine(toolTier, target.Resource) &&
+            MiningInteractionRules.CanMine(
                 IsControlActive,
                 uiBlocked,
                 miningRequested,
@@ -127,6 +170,11 @@ public partial class OnFootPlayerController : CharacterBody2D
 
     public override void _Draw()
     {
+        if (_dismantlingEffectActive && IsDismantlingToolEquipped)
+        {
+            DrawDismantlingBeam();
+        }
+
         if (!IsMining || !GodotObject.IsInstanceValid(_miningTarget))
         {
             return;
@@ -174,6 +222,74 @@ public partial class OnFootPlayerController : CharacterBody2D
 
     public void InterruptCurrentAction() => CancelMining();
 
+    public void SetMiningToolEquipped(bool equipped) =>
+        SetMiningTool(equipped ? ProductionItemIds.MiningTool : null);
+
+    public void SetActiveTool(ItemId? itemId)
+    {
+        SetMiningTool(itemId);
+        IsDismantlingToolEquipped = itemId == ProductionItemIds.MachineDismantlingTool;
+        if (!IsDismantlingToolEquipped)
+        {
+            ClearDismantlingEffect();
+        }
+        if (_dismantlingTool is not null)
+        {
+            _dismantlingTool.Visible = IsDismantlingToolEquipped;
+        }
+    }
+
+    public void SetDismantlingEffect(Vector2 targetWorldPosition, float progress)
+    {
+        if (!targetWorldPosition.IsFinite() || !float.IsFinite(progress))
+        {
+            throw new ArgumentException("Dismantling effect values must be finite.");
+        }
+
+        _dismantlingEffectActive = true;
+        _dismantlingTargetWorld = targetWorldPosition;
+        _dismantlingProgress = Math.Clamp(progress, 0, 1);
+        QueueRedraw();
+    }
+
+    public void ClearDismantlingEffect()
+    {
+        if (!_dismantlingEffectActive && _dismantlingProgress <= 0)
+        {
+            return;
+        }
+
+        _dismantlingEffectActive = false;
+        _dismantlingProgress = 0;
+        ResetDismantlingToolPose();
+        QueueRedraw();
+    }
+
+    public void SetMiningTool(ItemId? itemId)
+    {
+        var tier = default(MiningToolTier);
+        var equipped = itemId is { } selected && MiningToolRules.TryGetTier(selected, out tier);
+        if (IsMiningToolEquipped == equipped)
+        {
+            ActiveMiningToolId = equipped ? itemId : null;
+            ActiveMiningToolTier = equipped ? tier : null;
+            return;
+        }
+
+        IsMiningToolEquipped = equipped;
+        ActiveMiningToolId = equipped ? itemId : null;
+        ActiveMiningToolTier = equipped ? tier : null;
+        if (!equipped)
+        {
+            CancelMining();
+        }
+
+        if (_miningTool is not null)
+        {
+            _miningTool.Visible = equipped;
+        }
+    }
+
     public void StopMovementImmediately()
     {
         Velocity = Vector2.Zero;
@@ -185,6 +301,12 @@ public partial class OnFootPlayerController : CharacterBody2D
     {
         _inheritedDriftVelocity = velocity;
         Velocity = velocity;
+    }
+
+    public void SetRadiationEffects(double movementMultiplier, double miningEfficiencyMultiplier)
+    {
+        _radiationMovementMultiplier = (float)Math.Clamp(movementMultiplier, 0.1, 1);
+        _radiationMiningMultiplier = (float)Math.Clamp(miningEfficiencyMultiplier, 0.1, 1);
     }
 
     private void SetCollisionActive(bool active)
@@ -230,7 +352,11 @@ public partial class OnFootPlayerController : CharacterBody2D
         }
 
         ActionState = OnFootActionState.Mining;
-        _miningSession.Begin(target.DepositId, target.MiningTimeSeconds);
+        var speedMultiplier = ActiveMiningToolTier is { } tier
+            ? MiningToolRules.GetSpeedMultiplier(tier)
+            : 1;
+        speedMultiplier *= _radiationMiningMultiplier;
+        _miningSession.Begin(target.DepositId, target.MiningTimeSeconds / speedMultiplier);
         var completed = _miningSession.Advance(delta);
         _toolPulse += delta * 16;
         UpdateMiningToolPose();
@@ -257,10 +383,10 @@ public partial class OnFootPlayerController : CharacterBody2D
 
         var amount = target.YieldAmount;
         var displayName = target.DisplayName;
-        target.MarkExhausted();
+        target.CompleteManualHarvest();
         _hud.ShowMessage($"+{amount} {displayName}");
         _hud.UpdateInventory(_inventory, _resources);
-        CancelMining(resetTargetVisual: false);
+        CancelMining();
     }
 
     private void CancelMining(bool resetTargetVisual = true)
@@ -285,7 +411,7 @@ public partial class OnFootPlayerController : CharacterBody2D
     private void MoveNormally(float delta)
     {
         var direction = Input.GetVector("move_left", "move_right", "move_up", "move_down");
-        var targetVelocity = (direction * MovementSpeed) + _inheritedDriftVelocity;
+        var targetVelocity = (direction * MovementSpeed * _radiationMovementMultiplier) + _inheritedDriftVelocity;
         var velocityChange = direction.LengthSquared() > 0.01f ? Acceleration : Deceleration;
         Velocity = Velocity.MoveToward(targetVelocity, velocityChange * delta);
         MoveAndSlide();
@@ -375,6 +501,51 @@ public partial class OnFootPlayerController : CharacterBody2D
         _miningTool.Scale = Vector2.One;
     }
 
+    private void UpdateDismantlingToolPose(float delta)
+    {
+        _toolPulse += delta * 19;
+        var recoil = Mathf.Sin(_toolPulse * 1.35f);
+        _dismantlingTool.Position = _dismantlingToolRestPosition + new Vector2(recoil * 0.8f, recoil * 0.3f);
+        _dismantlingTool.Rotation = recoil * 0.022f;
+        _dismantlingTool.Scale = Vector2.One * (1 + (Mathf.Sin(_toolPulse * 0.72f) * 0.025f));
+    }
+
+    private void ResetDismantlingToolPose()
+    {
+        if (_dismantlingTool is null)
+        {
+            return;
+        }
+
+        _dismantlingTool.Position = _dismantlingToolRestPosition;
+        _dismantlingTool.Rotation = 0;
+        _dismantlingTool.Scale = Vector2.One;
+    }
+
+    private void DrawDismantlingBeam()
+    {
+        var muzzle = ToLocal(_dismantlingMuzzle.GlobalPosition);
+        var target = ToLocal(_dismantlingTargetWorld);
+        var pulse = 0.76f + (Mathf.Sin(_toolPulse * 1.2f) * 0.2f);
+        DrawLine(muzzle, target, new Color(0.02f, 0.42f, 0.58f, 0.22f), 11, true);
+        DrawLine(muzzle, target, new Color(0.08f, 0.82f, 1f, 0.82f), 4.2f, true);
+        DrawLine(muzzle, target, new Color(0.86f, 0.99f, 1f, 0.96f), 1.25f, true);
+        DrawCircle(target, 8.5f * pulse, new Color(0.16f, 0.88f, 1f, 0.7f));
+        DrawArc(target, 16, -Mathf.Pi / 2, (-Mathf.Pi / 2) + (Mathf.Tau * _dismantlingProgress),
+            32, new Color(0.34f, 0.96f, 1f, 0.95f), 3.2f, true);
+        DrawArc(target, 16, 0, Mathf.Tau, 32, new Color(0.04f, 0.2f, 0.27f, 0.82f), 1.2f, true);
+
+        for (var particleIndex = 0; particleIndex < 7; particleIndex++)
+        {
+            var phase = Mathf.PosMod((_toolPulse * 0.028f) + (particleIndex * 0.173f), 1);
+            var angle = (particleIndex * 2.399f) + (_toolPulse * 0.11f);
+            var distance = 5 + (phase * 22 * (0.35f + _dismantlingProgress));
+            var particle = target + (Vector2.FromAngle(angle) * distance);
+            DrawLine(particle, particle + (Vector2.FromAngle(angle) * 4),
+                new Color(0.35f, 0.92f, 1f, 1 - phase), 1.4f, true);
+        }
+    }
+
     private void UpdateResourcePrompt(ResourceDepositView? target, bool uiBlocked)
     {
         if (uiBlocked || target is null || IsMining)
@@ -383,9 +554,19 @@ public partial class OnFootPlayerController : CharacterBody2D
             return;
         }
 
-        _hud.SetResourcePrompt(IsWithinMiningRange(target)
-            ? $"{InputBindingFormatter.FormatAction("use_mining_tool")} halten: {target.DisplayName}"
-            : $"Zu weit entfernt: {target.DisplayName}");
+        if (IsWithinMiningRange(target) && IsMiningToolEquipped &&
+            ActiveMiningToolTier is { } selectedTier &&
+            !MiningToolRules.CanMine(selectedTier, target.Resource))
+        {
+            _hud.SetResourcePrompt("Stärkeres Abbauwerkzeug erforderlich");
+            return;
+        }
+
+        _hud.SetResourcePrompt(!IsWithinMiningRange(target)
+            ? $"Zu weit entfernt: {target.DisplayName}"
+            : IsMiningToolEquipped
+                ? $"{InputBindingFormatter.FormatAction("use_mining_tool")} halten: {target.DisplayName}"
+                : $"{InputBindingFormatter.FormatAction("activate_hand_slot")}: Hand-Slot und Abbauwerkzeug auswählen");
     }
 
     private bool IsWithinMiningRange(ResourceDepositView target) =>

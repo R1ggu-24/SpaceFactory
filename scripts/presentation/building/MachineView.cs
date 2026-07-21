@@ -1,4 +1,5 @@
 using Godot;
+using SpaceFactory.Core.Construction;
 using SpaceFactory.Core.Power;
 using SpaceFactory.Core.Production;
 using SpaceFactory.Presentation.World;
@@ -22,6 +23,7 @@ public partial class MachineView : StaticBody2D
     private float _visualConstructionProgress;
     private bool _constructionVisualRunning;
     private float _animationSeconds;
+    private float _dismantlingProgress;
 
     public MachineInstanceId InstanceId =>
         _state?.InstanceId ?? throw new InvalidOperationException("Machine view is not configured.");
@@ -218,6 +220,34 @@ public partial class MachineView : StaticBody2D
             .ToArray();
     }
 
+    public bool ContainsWorldPoint(Vector2 worldPoint, float padding = 8)
+    {
+        if (_presentation is null)
+        {
+            return false;
+        }
+
+        var local = ToLocal(worldPoint);
+        var half = (_presentation.Footprint * 0.5f) + new Vector2(padding, padding);
+        return Math.Abs(local.X) <= half.X && Math.Abs(local.Y) <= half.Y;
+    }
+
+    /// <summary>
+    /// Applies a non-destructive teardown preview. Actual removal and refunds remain atomic in
+    /// <see cref="DismantlingRules"/> and only happen after the hold interaction completes.
+    /// </summary>
+    public void SetDismantlingProgress(float progress)
+    {
+        var normalized = float.IsFinite(progress) ? Math.Clamp(progress, 0, 1) : 0;
+        if (Mathf.IsEqualApprox(_dismantlingProgress, normalized))
+        {
+            return;
+        }
+
+        _dismantlingProgress = normalized;
+        QueueRedraw();
+    }
+
     public override void _Draw()
     {
         if (_presentation is null || _state is null)
@@ -252,6 +282,40 @@ public partial class MachineView : StaticBody2D
         {
             DrawConstructionHologram(half, silhouette);
         }
+
+        if (_dismantlingProgress > 0)
+        {
+            DrawDismantlingOverlay(half, silhouette);
+        }
+    }
+
+    private void DrawDismantlingOverlay(Vector2 half, IReadOnlyList<Vector2> silhouette)
+    {
+        var pulse = 0.58f + (Mathf.Sin((float)Time.GetTicksMsec() * 0.018f) * 0.18f);
+        var energy = new Color(0.18f, 0.88f, 1f, pulse);
+        DrawPolyline(Close(silhouette), energy, 2.2f, true);
+
+        // Sequential scan lines make panels appear to detach without changing collision or state.
+        const int segmentCount = 7;
+        var visibleSegments = Math.Clamp(Mathf.CeilToInt(_dismantlingProgress * segmentCount), 1, segmentCount);
+        for (var segment = 0; segment < visibleSegments; segment++)
+        {
+            var y = Mathf.Lerp(-half.Y + 6, half.Y - 6, segment / (float)(segmentCount - 1));
+            var phase = Mathf.PosMod((float)Time.GetTicksMsec() * 0.0025f + (segment * 0.19f), 1);
+            var inset = 9 + (Mathf.Sin((segment * 1.9f) + phase) * 4);
+            DrawLine(
+                new Vector2(-half.X + inset, y),
+                new Vector2(half.X - inset, y + Mathf.Sin(segment) * 2),
+                new Color(energy, 0.18f + (_dismantlingProgress * 0.44f)),
+                1.15f,
+                true);
+        }
+
+        var separation = _dismantlingProgress * 3.5f;
+        DrawLine(new Vector2(-half.X * 0.55f - separation, -half.Y * 0.3f),
+            new Vector2(-half.X * 0.1f - separation, half.Y * 0.34f), energy, 1.4f, true);
+        DrawLine(new Vector2(half.X * 0.18f + separation, -half.Y * 0.42f),
+            new Vector2(half.X * 0.62f + separation, half.Y * 0.25f), energy, 1.4f, true);
     }
 
     private void EnsurePresentationNodes()
@@ -289,8 +353,8 @@ public partial class MachineView : StaticBody2D
             AddChild(_statusLabel);
         }
 
-        _statusLabel.Position = new Vector2(-90, -(_presentation.Footprint.Y * 0.5f) - 30);
-        _statusLabel.Size = new Vector2(180, 22);
+        _statusLabel.Position = new Vector2(-100, -(_presentation.Footprint.Y * 0.5f) - 48);
+        _statusLabel.Size = new Vector2(200, 42);
         RefreshStatusLabel();
     }
 
@@ -301,9 +365,10 @@ public partial class MachineView : StaticBody2D
             return;
         }
 
-        _statusLabel.Text = !_state.IsConstructionComplete || _constructionVisualRunning
+        var status = !_state.IsConstructionComplete || _constructionVisualRunning
             ? $"IM BAU  {Mathf.RoundToInt(_visualConstructionProgress * 100)}%"
             : GetStatusText(_state.Status);
+        _statusLabel.Text = $"{_state.Definition.DisplayName}\n{status}";
         _statusLabel.AddThemeColorOverride("font_color", GetStatusColor(_state.Status).Lightened(0.12f));
     }
 
@@ -436,6 +501,51 @@ public partial class MachineView : StaticBody2D
                 break;
             case MachineGlyph.Research:
                 DrawResearch(accent, alpha, producing);
+                break;
+            case MachineGlyph.MobileMiner:
+                DrawMiner(accent, alpha, producing, automatic: false);
+                break;
+            case MachineGlyph.AutomaticMiner:
+                DrawMiner(accent, alpha, producing, automatic: true);
+                break;
+            case MachineGlyph.ChemicalPlant:
+                DrawChemicalPlant(accent, alpha, producing);
+                break;
+            case MachineGlyph.Assembler:
+                DrawAssembler(accent, alpha, producing);
+                break;
+            case MachineGlyph.AdvancedFabricator:
+                DrawAdvancedFabricator(accent, alpha, producing);
+                break;
+            case MachineGlyph.PrecisionManufacturer:
+                DrawPrecisionManufacturer(accent, alpha, producing);
+                break;
+            case MachineGlyph.LiquidTank:
+                DrawFluidTank(accent, alpha, producing, gas: false);
+                break;
+            case MachineGlyph.GasTank:
+                DrawFluidTank(accent, alpha, producing, gas: true);
+                break;
+            case MachineGlyph.PumpStation:
+                DrawPumpStation(accent, alpha, producing);
+                break;
+            case MachineGlyph.BatteryBank:
+                DrawBatteryBank(accent, alpha, producing);
+                break;
+            case MachineGlyph.UraniumProcessor:
+                DrawUraniumProcessor(accent, alpha, producing);
+                break;
+            case MachineGlyph.FuelCellFabricator:
+                DrawFuelCellFabricator(accent, alpha, producing);
+                break;
+            case MachineGlyph.NuclearReactor:
+                DrawNuclearReactor(accent, alpha, producing);
+                break;
+            case MachineGlyph.WasteProcessor:
+                DrawWasteProcessor(accent, alpha, producing);
+                break;
+            case MachineGlyph.NuclearWasteStorage:
+                DrawNuclearWasteStorage(accent, alpha);
                 break;
         }
     }
@@ -705,6 +815,216 @@ public partial class MachineView : StaticBody2D
         }
     }
 
+    private void DrawMiner(Color accent, float alpha, bool producing, bool automatic)
+    {
+        var drillCenter = new Vector2(automatic ? -10 : 0, 0);
+        var drillRadius = automatic ? 23f : 19f;
+        DrawCircle(drillCenter, drillRadius, new Color(Recess, alpha));
+        DrawArc(drillCenter, drillRadius, 0, Mathf.Tau, 30, new Color(Titanium, alpha), 3, true);
+        var rotation = producing ? _animationSeconds * 2.4f : 0;
+        for (var index = 0; index < 7; index++)
+        {
+            var direction = Vector2.FromAngle(rotation + (Mathf.Tau * index / 7f));
+            DrawLine(drillCenter + direction * 7, drillCenter + direction * (drillRadius - 3),
+                new Color(accent, alpha), 3, true);
+        }
+        DrawCircle(drillCenter, 6, new Color(accent.Darkened(0.2f), alpha));
+        foreach (var foot in new[] { new Vector2(-34, -28), new Vector2(-34, 28), new Vector2(31, -28), new Vector2(31, 28) })
+        {
+            DrawLine(drillCenter + foot * 0.42f, foot, new Color(Titanium, alpha), 5, true);
+            DrawCircle(foot, 5, new Color(accent, alpha));
+        }
+        if (automatic)
+        {
+            DrawRect(new Rect2(18, -13, 42, 26), new Color(Recess, alpha), true);
+            DrawRect(new Rect2(18, -13, 42, 26), new Color(Titanium, alpha), false, 2, true);
+            for (var x = 24f; x < 58; x += 8)
+                DrawLine(new Vector2(x, -9), new Vector2(x, 9), new Color(accent, 0.7f * alpha), 2, true);
+        }
+        else
+        {
+            DrawRect(new Rect2(-13, 22, 26, 12), new Color(Recess, alpha), true);
+            DrawRect(new Rect2(-9, 25, 18, 5), new Color(accent, 0.65f * alpha), true);
+        }
+    }
+
+    private void DrawChemicalPlant(Color accent, float alpha, bool producing)
+    {
+        DrawTank(new Vector2(-37, 6), new Vector2(17, 34), accent.Darkened(0.18f), alpha, producing ? 0.48f : 0.25f);
+        DrawTank(new Vector2(35, -8), new Vector2(20, 37), accent, alpha, producing ? 0.64f : 0.3f);
+        DrawCircle(Vector2.Zero, 15, new Color(Recess, alpha));
+        DrawArc(Vector2.Zero, 15, 0, Mathf.Tau, 24, new Color(accent, alpha), 2.5f, true);
+        DrawLine(new Vector2(-20, 5), new Vector2(-14, 2), new Color(Titanium, alpha), 5, true);
+        DrawLine(new Vector2(14, -2), new Vector2(15, -5), new Color(Titanium, alpha), 5, true);
+        DrawGauge(new Vector2(-37, -24), accent, alpha);
+        if (producing)
+        {
+            DrawBubbles(new Vector2(35, -8), 25, 42, accent, alpha);
+            DrawFlowPulse(new Vector2(-18, 4), new Vector2(-13, 2), new Color(accent, alpha));
+        }
+    }
+
+    private void DrawAssembler(Color accent, float alpha, bool producing)
+    {
+        DrawRect(new Rect2(-22, -17, 44, 34), new Color(Recess, alpha), true);
+        DrawRect(new Rect2(-22, -17, 44, 34), new Color(accent, alpha), false, 2, true);
+        var travel = producing ? Mathf.Sin(_animationSeconds * 3.2f) * 5 : 0;
+        DrawMechanicalArm(new Vector2(-47, -30), new Vector2(-12 + travel, -8), accent, alpha);
+        DrawMechanicalArm(new Vector2(47, 30), new Vector2(12 - travel, 8), accent, alpha);
+        DrawCircle(Vector2.Zero, 7, new Color(accent, 0.7f * alpha));
+    }
+
+    private void DrawAdvancedFabricator(Color accent, float alpha, bool producing)
+    {
+        DrawFabricator(accent, alpha, producing);
+        foreach (var module in new[] { new Vector2(-58, -29), new Vector2(-58, 29), new Vector2(58, -29), new Vector2(58, 29) })
+        {
+            DrawLine(module * 0.7f, module, new Color(Titanium, alpha), 4, true);
+            DrawCircle(module, 7, new Color(Recess, alpha));
+            DrawArc(module, 7, 0, Mathf.Tau, 14, new Color(accent, alpha), 1.7f, true);
+        }
+        DrawArc(Vector2.Zero, 30, 0, Mathf.Tau, 28, new Color(accent, 0.45f * alpha), 1.5f, true);
+    }
+
+    private void DrawPrecisionManufacturer(Color accent, float alpha, bool producing)
+    {
+        var chip = new Rect2(-23, -23, 46, 46);
+        DrawRect(chip, new Color(Recess, alpha), true);
+        DrawRect(chip, new Color(accent, alpha), false, 2.2f, true);
+        for (var index = -3; index <= 3; index++)
+        {
+            var offset = index * 7f;
+            DrawLine(new Vector2(-39, offset), new Vector2(-23, offset), new Color(Titanium, alpha), 3, true);
+            DrawLine(new Vector2(23, offset), new Vector2(39, offset), new Color(Titanium, alpha), 3, true);
+        }
+        DrawMechanicalArm(new Vector2(-53, -34), new Vector2(-12, -12), accent, alpha);
+        var scanX = producing ? Mathf.Sin(_animationSeconds * 3f) * 15 : -12;
+        DrawLine(new Vector2(scanX, -19), new Vector2(scanX, 19), new Color(accent, 0.88f * alpha), 1.5f, true);
+    }
+
+    private void DrawFluidTank(Color accent, float alpha, bool producing, bool gas)
+    {
+        DrawCircle(Vector2.Zero, 34, new Color(Recess, alpha));
+        DrawArc(Vector2.Zero, 34, 0, Mathf.Tau, 40, new Color(Titanium, alpha), 3, true);
+        DrawArc(Vector2.Zero, 25, 0, Mathf.Tau, 36, new Color(accent, 0.72f * alpha), 2, true);
+        if (gas)
+        {
+            foreach (var bubble in new[] { new Vector2(-11, 7), new Vector2(8, -10), new Vector2(13, 13) })
+                DrawArc(bubble, 4 + (Mathf.Abs(bubble.X) % 3), 0, Mathf.Tau, 14, new Color(accent, 0.7f * alpha), 1.4f, true);
+        }
+        else
+        {
+            DrawRect(new Rect2(-22, 5, 44, 18), new Color(accent, (producing ? 0.42f : 0.25f) * alpha), true);
+            DrawLine(new Vector2(-22, 5), new Vector2(22, 5), new Color(accent, alpha), 1.5f, true);
+        }
+        DrawGauge(new Vector2(0, -25), accent, alpha);
+    }
+
+    private void DrawPumpStation(Color accent, float alpha, bool producing)
+    {
+        DrawLine(new Vector2(-40, 0), new Vector2(-21, 0), new Color(Titanium, alpha), 11, true);
+        DrawLine(new Vector2(21, 0), new Vector2(40, 0), new Color(Titanium, alpha), 11, true);
+        DrawCircle(Vector2.Zero, 23, new Color(Recess, alpha));
+        DrawArc(Vector2.Zero, 23, 0, Mathf.Tau, 30, new Color(accent, alpha), 2.5f, true);
+        DrawTurbine(Vector2.Zero, 18, 6, producing ? _animationSeconds * 4.5f : 0, accent, alpha);
+    }
+
+    private void DrawBatteryBank(Color accent, float alpha, bool producing)
+    {
+        for (var column = -3; column <= 3; column++)
+        {
+            var x = column * 15f;
+            DrawRect(new Rect2(x - 6, -24, 12, 48), new Color(Recess, alpha), true);
+            DrawRect(new Rect2(x - 6, -24, 12, 48), new Color(Titanium, alpha), false, 1.7f, true);
+            var fill = producing ? 31f : 18f;
+            DrawRect(new Rect2(x - 3, 20 - fill, 6, fill), new Color(accent, (0.35f + ((column + 3) * 0.07f)) * alpha), true);
+        }
+        DrawLine(new Vector2(-49, 29), new Vector2(49, 29), new Color(accent, alpha), 3, true);
+    }
+
+    private void DrawUraniumProcessor(Color accent, float alpha, bool producing)
+    {
+        DrawTank(new Vector2(-39, 0), new Vector2(17, 34), accent.Darkened(0.2f), alpha, producing ? 0.55f : 0.25f);
+        DrawCircle(new Vector2(18, 0), 31, new Color(Recess, alpha));
+        DrawArc(new Vector2(18, 0), 31, 0, Mathf.Tau, 38, new Color(Titanium, alpha), 3, true);
+        DrawRadiationMark(new Vector2(18, 0), 18, accent, alpha);
+        DrawGauge(new Vector2(-39, -27), accent, alpha);
+    }
+
+    private void DrawFuelCellFabricator(Color accent, float alpha, bool producing)
+    {
+        var motion = producing ? Mathf.Sin(_animationSeconds * 3.4f) * 5 : 0;
+        DrawMechanicalArm(new Vector2(-52, -32), new Vector2(-14 + motion, -10), accent, alpha);
+        DrawMechanicalArm(new Vector2(52, 32), new Vector2(14 - motion, 10), accent, alpha);
+        for (var column = -2; column <= 2; column++)
+        {
+            var x = column * 16f;
+            DrawRect(new Rect2(x - 5, -27, 10, 54), new Color(Recess, alpha), true);
+            DrawRect(new Rect2(x - 5, -27, 10, 54), new Color(accent, alpha), false, 1.8f, true);
+            DrawRect(new Rect2(x - 3, -13, 6, 18), new Color(accent, 0.35f * alpha), true);
+        }
+    }
+
+    private void DrawNuclearReactor(Color accent, float alpha, bool producing)
+    {
+        DrawCircle(Vector2.Zero, 42, new Color(Recess, alpha));
+        DrawArc(Vector2.Zero, 42, 0, Mathf.Tau, 48, new Color(Titanium, alpha), 4, true);
+        DrawArc(Vector2.Zero, 31, 0, Mathf.Tau, 40, new Color(accent, alpha), 3, true);
+        var pulse = producing ? 0.45f + (Mathf.Sin(_animationSeconds * 4f) * 0.18f) : 0.2f;
+        DrawCircle(Vector2.Zero, 15, new Color(accent, pulse * alpha));
+        for (var index = 0; index < 8; index++)
+        {
+            var direction = Vector2.FromAngle(Mathf.Tau * index / 8f);
+            DrawLine(direction * 42, direction * 59, new Color(Titanium, alpha), 8, true);
+            DrawLine(direction * 47, direction * 56, new Color(accent, 0.8f * alpha), 2, true);
+        }
+    }
+
+    private void DrawWasteProcessor(Color accent, float alpha, bool producing)
+    {
+        foreach (var x in new[] { -35f, 35f })
+        {
+            DrawCircle(new Vector2(x, 0), 25, new Color(Recess, alpha));
+            DrawArc(new Vector2(x, 0), 25, 0, Mathf.Tau, 32,
+                new Color(x < 0 ? Titanium : accent, alpha), 3, true);
+        }
+        DrawRadiationMark(new Vector2(-35, 0), 14, accent, alpha);
+        DrawLine(new Vector2(-9, 0), new Vector2(15, 0), new Color(accent, alpha), 4, true);
+        DrawLine(new Vector2(7, -7), new Vector2(16, 0), new Color(accent, alpha), 3, true);
+        DrawLine(new Vector2(7, 7), new Vector2(16, 0), new Color(accent, alpha), 3, true);
+        if (producing)
+            DrawParticles(new Vector2(35, -12), new Vector2(18, 18), new Color(accent, alpha), 5, 1.8f);
+    }
+
+    private void DrawNuclearWasteStorage(Color accent, float alpha)
+    {
+        for (var column = -2; column <= 2; column++)
+        {
+            var x = column * 24f;
+            DrawRect(new Rect2(x - 9, -30, 18, 60), new Color(Recess, alpha), true);
+            DrawRect(new Rect2(x - 9, -30, 18, 60), new Color(Titanium, alpha), false, 2, true);
+            DrawLine(new Vector2(x - 8, -13), new Vector2(x + 8, -13), new Color(accent, alpha), 3, true);
+            DrawRadiationMark(new Vector2(x, 9), 8, accent, alpha);
+        }
+    }
+
+    private void DrawRadiationMark(Vector2 center, float radius, Color accent, float alpha)
+    {
+        DrawCircle(center, radius * 0.2f, new Color(accent, alpha));
+        for (var index = 0; index < 3; index++)
+        {
+            var direction = Vector2.FromAngle((-Mathf.Pi * 0.5f) + (Mathf.Tau * index / 3f));
+            Vector2[] blade =
+            [
+                center + direction * radius * 0.36f,
+                center + direction * radius,
+                center + direction.Rotated(0.42f) * radius * 0.7f,
+            ];
+            DrawColoredPolygon(blade, new Color(accent, alpha));
+        }
+        DrawCircle(center, radius * 0.1f, new Color(Recess, alpha));
+    }
+
     private void DrawTank(Vector2 center, Vector2 radius, Color accent, float alpha, float fill)
     {
         var tank = new Rect2(center - radius, radius * 2);
@@ -829,13 +1149,18 @@ public partial class MachineView : StaticBody2D
             MachineGlyph.Smelter => [new(-half.X + 18, -half.Y), new(half.X - 18, -half.Y), new(half.X, -half.Y + 18), new(half.X, half.Y - 18), new(half.X - 18, half.Y), new(-half.X + 18, half.Y), new(-half.X, half.Y - 18), new(-half.X, -half.Y + 18)],
             MachineGlyph.Foundry => [new(-half.X, -half.Y + 12), new(-half.X + 25, -half.Y + 12), new(-half.X + 25, -half.Y), new(half.X - 14, -half.Y), new(half.X, -half.Y + 14), new(half.X, half.Y - 14), new(half.X - 14, half.Y), new(-half.X + 25, half.Y), new(-half.X + 25, half.Y - 12), new(-half.X, half.Y - 12)],
             MachineGlyph.Constructor => [new(-half.X + 12, -half.Y), new(half.X - 21, -half.Y), new(half.X - 21, -half.Y + 8), new(half.X, -half.Y + 8), new(half.X, half.Y - 8), new(half.X - 21, half.Y - 8), new(half.X - 21, half.Y), new(-half.X + 12, half.Y), new(-half.X, half.Y - 12), new(-half.X, -half.Y + 12)],
-            MachineGlyph.Fabricator or MachineGlyph.Research => [new(-half.X + 20, -half.Y), new(half.X - 20, -half.Y), new(half.X, -half.Y + 20), new(half.X, half.Y - 20), new(half.X - 20, half.Y), new(-half.X + 20, half.Y), new(-half.X, half.Y - 20), new(-half.X, -half.Y + 20)],
-            MachineGlyph.WaterProcessor or MachineGlyph.Electrolyzer => [new(-half.X + 14, -half.Y), new(half.X - 14, -half.Y), new(half.X, -half.Y + 14), new(half.X, half.Y - 14), new(half.X - 14, half.Y), new(-half.X + 14, half.Y), new(-half.X, half.Y - 14), new(-half.X, -half.Y + 14)],
+            MachineGlyph.Fabricator or MachineGlyph.Research or MachineGlyph.AdvancedFabricator or
+                MachineGlyph.PrecisionManufacturer or MachineGlyph.FuelCellFabricator or MachineGlyph.NuclearReactor => [new(-half.X + 20, -half.Y), new(half.X - 20, -half.Y), new(half.X, -half.Y + 20), new(half.X, half.Y - 20), new(half.X - 20, half.Y), new(-half.X + 20, half.Y), new(-half.X, half.Y - 20), new(-half.X, -half.Y + 20)],
+            MachineGlyph.WaterProcessor or MachineGlyph.Electrolyzer or MachineGlyph.ChemicalPlant or
+                MachineGlyph.UraniumProcessor or MachineGlyph.WasteProcessor or MachineGlyph.LiquidTank or
+                MachineGlyph.GasTank => [new(-half.X + 14, -half.Y), new(half.X - 14, -half.Y), new(half.X, -half.Y + 14), new(half.X, half.Y - 14), new(half.X - 14, half.Y), new(-half.X + 14, half.Y), new(-half.X, half.Y - 14), new(-half.X, -half.Y + 14)],
             MachineGlyph.Refinery => [new(-half.X, -half.Y + 14), new(-half.X + 20, -half.Y + 14), new(-half.X + 20, -half.Y), new(half.X - 20, -half.Y), new(half.X - 20, -half.Y + 14), new(half.X, -half.Y + 14), new(half.X, half.Y - 14), new(half.X - 20, half.Y - 14), new(half.X - 20, half.Y), new(-half.X + 20, half.Y), new(-half.X + 20, half.Y - 14), new(-half.X, half.Y - 14)],
-            MachineGlyph.BasicGenerator => [new(-half.X + 12, -half.Y), new(half.X - 12, -half.Y), new(half.X, -half.Y + 12), new(half.X, half.Y - 12), new(half.X - 12, half.Y), new(-half.X + 12, half.Y), new(-half.X, half.Y - 12), new(-half.X, -half.Y + 12)],
+            MachineGlyph.BasicGenerator or MachineGlyph.MobileMiner or MachineGlyph.AutomaticMiner or
+                MachineGlyph.PumpStation => [new(-half.X + 12, -half.Y), new(half.X - 12, -half.Y), new(half.X, -half.Y + 12), new(half.X, half.Y - 12), new(half.X - 12, half.Y), new(-half.X + 12, half.Y), new(-half.X, half.Y - 12), new(-half.X, -half.Y + 12)],
             MachineGlyph.PowerPole => [new(-half.X + 7, -half.Y), new(half.X - 7, -half.Y), new(half.X, -half.Y + 7), new(half.X, half.Y - 7), new(half.X - 7, half.Y), new(-half.X + 7, half.Y), new(-half.X, half.Y - 7), new(-half.X, -half.Y + 7)],
             MachineGlyph.FuelGenerator => [new(-half.X, -half.Y + 10), new(-half.X + 19, -half.Y + 10), new(-half.X + 19, -half.Y), new(half.X - 13, -half.Y), new(half.X, -half.Y + 13), new(half.X, half.Y - 13), new(half.X - 13, half.Y), new(-half.X + 19, half.Y), new(-half.X + 19, half.Y - 10), new(-half.X, half.Y - 10)],
-            MachineGlyph.Storage => [new(-half.X + 9, -half.Y), new(half.X - 9, -half.Y), new(half.X, -half.Y + 9), new(half.X, half.Y - 9), new(half.X - 9, half.Y), new(-half.X + 9, half.Y), new(-half.X, half.Y - 9), new(-half.X, -half.Y + 9)],
+            MachineGlyph.Storage or MachineGlyph.BatteryBank or MachineGlyph.NuclearWasteStorage or
+                MachineGlyph.Assembler => [new(-half.X + 9, -half.Y), new(half.X - 9, -half.Y), new(half.X, -half.Y + 9), new(half.X, half.Y - 9), new(half.X - 9, half.Y), new(-half.X + 9, half.Y), new(-half.X, half.Y - 9), new(-half.X, -half.Y + 9)],
             _ => [new(-half.X, -half.Y), new(half.X, -half.Y), new(half.X, half.Y), new(-half.X, half.Y)],
         };
     }

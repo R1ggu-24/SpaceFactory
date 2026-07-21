@@ -111,6 +111,51 @@ public partial class MachineGlyphControl : Control
             case MachineGlyph.Research:
                 DrawResearch(center, scale, accent, metal, recess);
                 break;
+            case MachineGlyph.MobileMiner:
+                DrawMiner(center, scale, accent, metal, recess, automatic: false);
+                break;
+            case MachineGlyph.AutomaticMiner:
+                DrawMiner(center, scale, accent, metal, recess, automatic: true);
+                break;
+            case MachineGlyph.ChemicalPlant:
+                DrawChemicalPlant(center, scale, accent, metal, recess);
+                break;
+            case MachineGlyph.Assembler:
+                DrawAssembler(center, scale, accent, metal, recess);
+                break;
+            case MachineGlyph.AdvancedFabricator:
+                DrawAdvancedFabricator(center, scale, accent, metal, recess);
+                break;
+            case MachineGlyph.PrecisionManufacturer:
+                DrawPrecisionManufacturer(center, scale, accent, metal, recess);
+                break;
+            case MachineGlyph.LiquidTank:
+                DrawFluidTank(center, scale, accent, metal, recess, gas: false);
+                break;
+            case MachineGlyph.GasTank:
+                DrawFluidTank(center, scale, accent, metal, recess, gas: true);
+                break;
+            case MachineGlyph.PumpStation:
+                DrawPumpStation(center, scale, accent, metal, recess);
+                break;
+            case MachineGlyph.BatteryBank:
+                DrawBatteryBank(center, scale, accent, metal, recess);
+                break;
+            case MachineGlyph.UraniumProcessor:
+                DrawUraniumProcessor(center, scale, accent, metal, recess);
+                break;
+            case MachineGlyph.FuelCellFabricator:
+                DrawFuelCellFabricator(center, scale, accent, metal, recess);
+                break;
+            case MachineGlyph.NuclearReactor:
+                DrawNuclearReactor(center, scale, accent, metal, recess);
+                break;
+            case MachineGlyph.WasteProcessor:
+                DrawWasteProcessor(center, scale, accent, metal, recess);
+                break;
+            case MachineGlyph.NuclearWasteStorage:
+                DrawNuclearWasteStorage(center, scale, accent, metal, recess);
+                break;
         }
     }
 
@@ -375,6 +420,213 @@ public partial class MachineGlyphControl : Control
         DrawRect(new Rect2(c + new Vector2(21, -15) * s, new Vector2(11, 7) * s), new Color(accent, 0.32f), true);
     }
 
+    private void DrawMiner(Vector2 c, float s, Color accent, Color metal, Color recess, bool automatic)
+    {
+        var drill = c + new Vector2(automatic ? -7 : 0, 0) * s;
+        DrawCircle(drill, (automatic ? 15 : 13) * s, recess);
+        DrawArc(drill, (automatic ? 15 : 13) * s, 0, Mathf.Tau, 24, metal.Lightened(0.22f), 2 * s, true);
+        for (var index = 0; index < 6; index++)
+        {
+            var direction = Vector2.FromAngle((Mathf.Tau * index / 6f) + Mathf.Pi / 6f);
+            DrawLine(drill + direction * 5 * s, drill + direction * 12 * s, accent, 2 * s, true);
+        }
+        DrawCircle(drill, 4 * s, accent.Darkened(0.18f));
+        foreach (var offset in new[] { new Vector2(-22, -16), new Vector2(-22, 16), new Vector2(18, -16), new Vector2(18, 16) })
+        {
+            DrawLine(drill + offset * 0.48f * s, c + offset * s, metal, 3 * s, true);
+            DrawCircle(c + offset * s, 3.2f * s, accent);
+        }
+        if (automatic)
+        {
+            var belt = new Rect2(c + new Vector2(12, -8) * s, new Vector2(25, 16) * s);
+            DrawRect(belt, recess, true);
+            DrawRect(belt, metal.Lightened(0.18f), false, 1.4f * s, true);
+            for (var x = 17; x <= 32; x += 5)
+                DrawLine(c + new Vector2(x, -5) * s, c + new Vector2(x, 5) * s, accent, 1.1f * s, true);
+        }
+        else
+        {
+            DrawRect(new Rect2(c + new Vector2(-8, 17) * s, new Vector2(16, 8) * s), recess, true);
+            DrawRect(new Rect2(c + new Vector2(-5, 19) * s, new Vector2(10, 3) * s), accent, true);
+        }
+    }
+
+    private void DrawChemicalPlant(Vector2 c, float s, Color accent, Color metal, Color recess)
+    {
+        DrawTank(c + new Vector2(-22, 3) * s, new Vector2(11, 20) * s, accent.Darkened(0.12f), recess, s);
+        DrawTank(c + new Vector2(20, -5) * s, new Vector2(13, 22) * s, accent, recess, s);
+        DrawCircle(c, 9 * s, recess);
+        DrawArc(c, 9 * s, 0, Mathf.Tau, 18, accent.Lightened(0.12f), 1.7f * s, true);
+        DrawLine(c + new Vector2(-11, 3) * s, c + new Vector2(-8, 1) * s, metal, 3 * s, true);
+        DrawLine(c + new Vector2(8, -1) * s, c + new Vector2(7, -3) * s, metal, 3 * s, true);
+        DrawGauge(c + new Vector2(-22, -14) * s, s, accent, recess);
+        for (var index = 0; index < 3; index++)
+            DrawCircle(c + new Vector2(15 + (index * 4), 12 - (index * 3)) * s,
+                (1.2f + (index * 0.35f)) * s, new Color(accent, 0.72f));
+    }
+
+    private void DrawAssembler(Vector2 c, float s, Color accent, Color metal, Color recess)
+    {
+        var table = new Rect2(c - new Vector2(13, 10) * s, new Vector2(26, 20) * s);
+        DrawRect(table, recess, true);
+        DrawRect(table, accent, false, 1.5f * s, true);
+        DrawArm(c + new Vector2(-27, -17) * s, c + new Vector2(-8, -4) * s, s, metal, accent);
+        DrawArm(c + new Vector2(27, 17) * s, c + new Vector2(8, 4) * s, s, metal, accent);
+        DrawPort(c + new Vector2(-31, 7) * s, s, accent, recess);
+        DrawPort(c + new Vector2(31, -7) * s, s, accent, recess);
+        DrawCircle(c, 4 * s, accent);
+    }
+
+    private void DrawAdvancedFabricator(Vector2 c, float s, Color accent, Color metal, Color recess)
+    {
+        var chamber = ScalePolygon(c, s, [new(-16, -18), new(16, -18), new(22, -10), new(22, 10), new(16, 18), new(-16, 18), new(-22, 10), new(-22, -10)]);
+        DrawColoredPolygon(chamber, recess);
+        DrawPolyline(Close(chamber), accent, 1.7f * s, true);
+        DrawCircle(c, 9 * s, metal);
+        DrawArc(c, 6 * s, 0, Mathf.Tau, 18, accent, 2 * s, true);
+        foreach (var offset in new[] { new Vector2(-34, -14), new Vector2(-34, 14), new Vector2(34, -14), new Vector2(34, 14) })
+        {
+            DrawPort(c + offset * s, s, accent, recess);
+            DrawLine(c + offset * 0.72f * s, c + offset * s, metal, 2 * s, true);
+        }
+    }
+
+    private void DrawPrecisionManufacturer(Vector2 c, float s, Color accent, Color metal, Color recess)
+    {
+        var chip = new Rect2(c - new Vector2(14, 14) * s, new Vector2(28, 28) * s);
+        DrawRect(chip, recess, true);
+        DrawRect(chip, accent, false, 1.6f * s, true);
+        for (var index = -2; index <= 2; index++)
+        {
+            DrawLine(c + new Vector2(-24, index * 5) * s, c + new Vector2(-14, index * 5) * s, metal, 1.8f * s, true);
+            DrawLine(c + new Vector2(14, index * 5) * s, c + new Vector2(24, index * 5) * s, metal, 1.8f * s, true);
+        }
+        DrawCircle(c, 4.5f * s, new Color(accent, 0.82f));
+        DrawArm(c + new Vector2(-30, -20) * s, c + new Vector2(-8, -8) * s, s, metal, accent);
+        DrawLine(c + new Vector2(0, -25) * s, c + new Vector2(0, -5) * s, accent, 1.4f * s, true);
+    }
+
+    private void DrawFluidTank(Vector2 c, float s, Color accent, Color metal, Color recess, bool gas)
+    {
+        DrawCircle(c, 21 * s, recess);
+        DrawArc(c, 21 * s, 0, Mathf.Tau, 30, metal.Lightened(0.22f), 2 * s, true);
+        DrawArc(c, 15 * s, 0, Mathf.Tau, 26, new Color(accent, 0.72f), 1.5f * s, true);
+        if (gas)
+        {
+            DrawCircle(c + new Vector2(-6, 3) * s, 3 * s, new Color(accent, 0.45f));
+            DrawCircle(c + new Vector2(5, -6) * s, 2.2f * s, new Color(accent, 0.62f));
+            DrawCircle(c + new Vector2(7, 7) * s, 1.6f * s, new Color(accent, 0.5f));
+        }
+        else
+            DrawRect(new Rect2(c + new Vector2(-13, 4) * s, new Vector2(26, 10) * s), new Color(accent, 0.32f), true);
+        DrawPort(c + new Vector2(0, -27) * s, s, accent, recess);
+    }
+
+    private void DrawPumpStation(Vector2 c, float s, Color accent, Color metal, Color recess)
+    {
+        DrawLine(c + new Vector2(-29, 0) * s, c + new Vector2(-14, 0) * s, metal, 7 * s, true);
+        DrawLine(c + new Vector2(14, 0) * s, c + new Vector2(29, 0) * s, metal, 7 * s, true);
+        DrawCircle(c, 16 * s, recess);
+        DrawArc(c, 16 * s, 0, Mathf.Tau, 24, accent, 1.8f * s, true);
+        for (var index = 0; index < 5; index++)
+        {
+            var direction = Vector2.FromAngle(Mathf.Tau * index / 5f);
+            DrawLine(c + direction * 4 * s, c + direction.Rotated(0.38f) * 12 * s, accent, 2.2f * s, true);
+        }
+        DrawCircle(c, 3.5f * s, metal.Lightened(0.2f));
+    }
+
+    private void DrawBatteryBank(Vector2 c, float s, Color accent, Color metal, Color recess)
+    {
+        for (var column = -2; column <= 2; column++)
+        {
+            var cell = new Rect2(c + new Vector2((column * 12) - 5, -15) * s, new Vector2(10, 30) * s);
+            DrawRect(cell, recess, true);
+            DrawRect(cell, metal.Lightened(0.18f), false, 1.2f * s, true);
+            DrawRect(new Rect2(c + new Vector2((column * 12) - 3, -11) * s, new Vector2(6, 19) * s),
+                new Color(accent, 0.24f + ((column + 2) * 0.1f)), true);
+        }
+        DrawLine(c + new Vector2(-28, 20) * s, c + new Vector2(28, 20) * s, accent, 2 * s, true);
+    }
+
+    private void DrawUraniumProcessor(Vector2 c, float s, Color accent, Color metal, Color recess)
+    {
+        DrawTank(c + new Vector2(-22, 0) * s, new Vector2(12, 22) * s, accent.Darkened(0.18f), recess, s);
+        DrawCircle(c + new Vector2(12, 0) * s, 19 * s, recess);
+        DrawArc(c + new Vector2(12, 0) * s, 19 * s, 0, Mathf.Tau, 28, metal.Lightened(0.2f), 2.2f * s, true);
+        DrawRadiationMark(c + new Vector2(12, 0) * s, 11 * s, accent, recess);
+        DrawGauge(c + new Vector2(-22, -17) * s, s, accent, recess);
+    }
+
+    private void DrawFuelCellFabricator(Vector2 c, float s, Color accent, Color metal, Color recess)
+    {
+        DrawArm(c + new Vector2(-29, -18) * s, c + new Vector2(-9, -7) * s, s, metal, accent);
+        DrawArm(c + new Vector2(29, 18) * s, c + new Vector2(9, 7) * s, s, metal, accent);
+        for (var column = -1; column <= 1; column++)
+        {
+            var cell = new Rect2(c + new Vector2((column * 12) - 4, -17) * s, new Vector2(8, 34) * s);
+            DrawRect(cell, recess, true);
+            DrawRect(cell, accent, false, 1.3f * s, true);
+            DrawRect(new Rect2(cell.Position + new Vector2(2, 5) * s, new Vector2(4, 10) * s), new Color(accent, 0.42f), true);
+        }
+    }
+
+    private void DrawNuclearReactor(Vector2 c, float s, Color accent, Color metal, Color recess)
+    {
+        DrawCircle(c, 24 * s, recess);
+        DrawArc(c, 24 * s, 0, Mathf.Tau, 36, metal.Lightened(0.24f), 2.2f * s, true);
+        DrawArc(c, 17 * s, 0, Mathf.Tau, 30, accent, 2.2f * s, true);
+        DrawCircle(c, 8 * s, new Color(accent, 0.45f));
+        for (var index = 0; index < 8; index++)
+        {
+            var direction = Vector2.FromAngle(Mathf.Tau * index / 8f);
+            DrawLine(c + direction * 24 * s, c + direction * 33 * s, metal, 5 * s, true);
+            DrawLine(c + direction * 26 * s, c + direction * 31 * s, accent, 1.2f * s, true);
+        }
+    }
+
+    private void DrawWasteProcessor(Vector2 c, float s, Color accent, Color metal, Color recess)
+    {
+        foreach (var x in new[] { -20f, 20f })
+        {
+            DrawCircle(c + new Vector2(x, 0) * s, 15 * s, recess);
+            DrawArc(c + new Vector2(x, 0) * s, 15 * s, 0, Mathf.Tau, 22, x < 0 ? metal : accent, 1.8f * s, true);
+        }
+        DrawRadiationMark(c + new Vector2(-20, 0) * s, 8 * s, accent, recess);
+        DrawLine(c + new Vector2(-4, 0) * s, c + new Vector2(8, 0) * s, accent, 2.5f * s, true);
+        DrawLine(c + new Vector2(3, -5) * s, c + new Vector2(9, 0) * s, accent, 2 * s, true);
+        DrawLine(c + new Vector2(3, 5) * s, c + new Vector2(9, 0) * s, accent, 2 * s, true);
+    }
+
+    private void DrawNuclearWasteStorage(Vector2 c, float s, Color accent, Color metal, Color recess)
+    {
+        for (var column = -1; column <= 1; column++)
+        {
+            var container = new Rect2(c + new Vector2((column * 20) - 8, -18) * s, new Vector2(16, 36) * s);
+            DrawRect(container, recess, true);
+            DrawRect(container, metal.Lightened(0.16f), false, 1.5f * s, true);
+            DrawLine(c + new Vector2((column * 20) - 7, -8) * s,
+                c + new Vector2((column * 20) + 7, -8) * s, accent, 2 * s, true);
+            DrawRadiationMark(c + new Vector2(column * 20, 5) * s, 6 * s, accent, recess);
+        }
+    }
+
+    private void DrawRadiationMark(Vector2 center, float radius, Color accent, Color recess)
+    {
+        DrawCircle(center, radius * 0.2f, accent);
+        for (var index = 0; index < 3; index++)
+        {
+            var direction = Vector2.FromAngle((-Mathf.Pi * 0.5f) + (Mathf.Tau * index / 3f));
+            DrawColoredPolygon(
+            [
+                center + direction * radius * 0.36f,
+                center + direction * radius,
+                center + direction.Rotated(0.42f) * radius * 0.7f,
+            ], accent);
+        }
+        DrawCircle(center, radius * 0.1f, recess);
+    }
+
     private void DrawTank(Vector2 center, Vector2 radius, Color accent, Color recess, float scale)
     {
         var tank = new Rect2(center - radius, radius * 2);
@@ -448,15 +700,21 @@ public partial class MachineGlyphControl : Control
 
     private static Vector2 GetNominalSize(MachineGlyph glyph) => glyph switch
     {
-        MachineGlyph.BasicGenerator => new Vector2(48, 48),
+        MachineGlyph.BasicGenerator or MachineGlyph.PumpStation => new Vector2(48, 48),
         MachineGlyph.PowerPole => new Vector2(56, 48),
-        MachineGlyph.Refinery => new Vector2(70, 48),
-        MachineGlyph.Foundry or MachineGlyph.Fabricator or MachineGlyph.Research => new Vector2(62, 50),
-        MachineGlyph.Storage => new Vector2(66, 42),
+        MachineGlyph.Refinery or MachineGlyph.ChemicalPlant or MachineGlyph.UraniumProcessor or
+            MachineGlyph.WasteProcessor => new Vector2(70, 52),
+        MachineGlyph.Foundry or MachineGlyph.Fabricator or MachineGlyph.Research or MachineGlyph.Assembler or
+            MachineGlyph.AdvancedFabricator or MachineGlyph.PrecisionManufacturer or
+            MachineGlyph.FuelCellFabricator => new Vector2(66, 52),
+        MachineGlyph.Storage or MachineGlyph.BatteryBank or MachineGlyph.NuclearWasteStorage => new Vector2(66, 44),
+        MachineGlyph.NuclearReactor => new Vector2(72, 60),
+        MachineGlyph.LiquidTank or MachineGlyph.GasTank => new Vector2(56, 56),
         MachineGlyph.PowerCable or MachineGlyph.ConveyorBelt or MachineGlyph.LiquidPipe or MachineGlyph.GasPipe =>
             new Vector2(66, 44),
         MachineGlyph.Crusher or MachineGlyph.Constructor or MachineGlyph.WaterProcessor or
-            MachineGlyph.Electrolyzer or MachineGlyph.FuelGenerator => new Vector2(60, 44),
+            MachineGlyph.Electrolyzer or MachineGlyph.FuelGenerator or MachineGlyph.MobileMiner or
+            MachineGlyph.AutomaticMiner => new Vector2(60, 48),
         _ => new Vector2(52, 52),
     };
 
@@ -473,13 +731,18 @@ public partial class MachineGlyphControl : Control
             MachineGlyph.Smelter => [new(-half.X + 10, -half.Y), new(half.X - 10, -half.Y), new(half.X, -half.Y + 10), new(half.X, half.Y - 10), new(half.X - 10, half.Y), new(-half.X + 10, half.Y), new(-half.X, half.Y - 10), new(-half.X, -half.Y + 10)],
             MachineGlyph.Foundry => [new(-half.X, -half.Y + 7), new(-half.X + 16, -half.Y + 7), new(-half.X + 16, -half.Y), new(half.X - 8, -half.Y), new(half.X, -half.Y + 8), new(half.X, half.Y - 8), new(half.X - 8, half.Y), new(-half.X + 16, half.Y), new(-half.X + 16, half.Y - 7), new(-half.X, half.Y - 7)],
             MachineGlyph.Constructor => [new(-half.X + 7, -half.Y), new(half.X - 13, -half.Y), new(half.X - 13, -half.Y + 5), new(half.X, -half.Y + 5), new(half.X, half.Y - 5), new(half.X - 13, half.Y - 5), new(half.X - 13, half.Y), new(-half.X + 7, half.Y), new(-half.X, half.Y - 7), new(-half.X, -half.Y + 7)],
-            MachineGlyph.Fabricator or MachineGlyph.Research => [new(-half.X + 13, -half.Y), new(half.X - 13, -half.Y), new(half.X, -half.Y + 13), new(half.X, half.Y - 13), new(half.X - 13, half.Y), new(-half.X + 13, half.Y), new(-half.X, half.Y - 13), new(-half.X, -half.Y + 13)],
-            MachineGlyph.WaterProcessor or MachineGlyph.Electrolyzer => [new(-half.X + 9, -half.Y), new(half.X - 9, -half.Y), new(half.X, -half.Y + 9), new(half.X, half.Y - 9), new(half.X - 9, half.Y), new(-half.X + 9, half.Y), new(-half.X, half.Y - 9), new(-half.X, -half.Y + 9)],
+            MachineGlyph.Fabricator or MachineGlyph.Research or MachineGlyph.AdvancedFabricator or
+                MachineGlyph.PrecisionManufacturer or MachineGlyph.FuelCellFabricator or MachineGlyph.NuclearReactor => [new(-half.X + 13, -half.Y), new(half.X - 13, -half.Y), new(half.X, -half.Y + 13), new(half.X, half.Y - 13), new(half.X - 13, half.Y), new(-half.X + 13, half.Y), new(-half.X, half.Y - 13), new(-half.X, -half.Y + 13)],
+            MachineGlyph.WaterProcessor or MachineGlyph.Electrolyzer or MachineGlyph.ChemicalPlant or
+                MachineGlyph.UraniumProcessor or MachineGlyph.WasteProcessor or MachineGlyph.LiquidTank or
+                MachineGlyph.GasTank => [new(-half.X + 9, -half.Y), new(half.X - 9, -half.Y), new(half.X, -half.Y + 9), new(half.X, half.Y - 9), new(half.X - 9, half.Y), new(-half.X + 9, half.Y), new(-half.X, half.Y - 9), new(-half.X, -half.Y + 9)],
             MachineGlyph.Refinery => [new(-half.X, -half.Y + 8), new(-half.X + 12, -half.Y + 8), new(-half.X + 12, -half.Y), new(half.X - 12, -half.Y), new(half.X - 12, -half.Y + 8), new(half.X, -half.Y + 8), new(half.X, half.Y - 8), new(half.X - 12, half.Y - 8), new(half.X - 12, half.Y), new(-half.X + 12, half.Y), new(-half.X + 12, half.Y - 8), new(-half.X, half.Y - 8)],
-            MachineGlyph.BasicGenerator => [new(-half.X + 8, -half.Y), new(half.X - 8, -half.Y), new(half.X, -half.Y + 8), new(half.X, half.Y - 8), new(half.X - 8, half.Y), new(-half.X + 8, half.Y), new(-half.X, half.Y - 8), new(-half.X, -half.Y + 8)],
+            MachineGlyph.BasicGenerator or MachineGlyph.MobileMiner or MachineGlyph.AutomaticMiner or
+                MachineGlyph.PumpStation => [new(-half.X + 8, -half.Y), new(half.X - 8, -half.Y), new(half.X, -half.Y + 8), new(half.X, half.Y - 8), new(half.X - 8, half.Y), new(-half.X + 8, half.Y), new(-half.X, half.Y - 8), new(-half.X, -half.Y + 8)],
             MachineGlyph.PowerPole => [new(-half.X + 8, -half.Y), new(half.X - 8, -half.Y), new(half.X, -half.Y + 8), new(half.X, half.Y - 8), new(half.X - 8, half.Y), new(-half.X + 8, half.Y), new(-half.X, half.Y - 8), new(-half.X, -half.Y + 8)],
             MachineGlyph.FuelGenerator => [new(-half.X, -half.Y + 6), new(-half.X + 12, -half.Y + 6), new(-half.X + 12, -half.Y), new(half.X - 8, -half.Y), new(half.X, -half.Y + 8), new(half.X, half.Y - 8), new(half.X - 8, half.Y), new(-half.X + 12, half.Y), new(-half.X + 12, half.Y - 6), new(-half.X, half.Y - 6)],
-            MachineGlyph.Storage => [new(-half.X + 6, -half.Y), new(half.X - 6, -half.Y), new(half.X, -half.Y + 6), new(half.X, half.Y - 6), new(half.X - 6, half.Y), new(-half.X + 6, half.Y), new(-half.X, half.Y - 6), new(-half.X, -half.Y + 6)],
+            MachineGlyph.Storage or MachineGlyph.BatteryBank or MachineGlyph.NuclearWasteStorage or
+                MachineGlyph.Assembler => [new(-half.X + 6, -half.Y), new(half.X - 6, -half.Y), new(half.X, -half.Y + 6), new(half.X, half.Y - 6), new(half.X - 6, half.Y), new(-half.X + 6, half.Y), new(-half.X, half.Y - 6), new(-half.X, -half.Y + 6)],
             _ => [new(-half.X, -half.Y), new(half.X, -half.Y), new(half.X, half.Y), new(-half.X, half.Y)],
         };
         return local.Select(point => center + point * scale).ToArray();

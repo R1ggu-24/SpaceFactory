@@ -118,3 +118,31 @@ grow_vertical = 2
 horizontal_alignment = 1
 theme_override_colors/font_color = Color(1, 0.88, 0.45, 1)
 theme_override_font_sizes/font_size = 20
+
+[node name="RadiationPanel" type="PanelContainer" parent="."]
+visible = false
+anchors_preset = 3
+anchor_top = 1.0
+anchor_bottom = 1.0
+offset_left = 22.0
+offset_top = -218.0
+offset_right = 252.0
+offset_bottom = -142.0
+grow_vertical = 0
+
+[node name="Content" type="VBoxContainer" parent="RadiationPanel"]
+theme_override_constants/separation = 3
+
+[node name="Title" type="Label" parent="RadiationPanel/Content"]
+text = "STRAHLUNG"
+theme_override_colors/font_color = Color(0.66, 1, 0.36, 1)
+theme_override_font_sizes/font_size = 14
+
+[node name="DoseProgress" type="ProgressBar" parent="RadiationPanel/Content"]
+custom_minimum_size = Vector2(210, 12)
+max_value = 100.0
+show_percentage = false
+
+[node name="DoseStatus" type="Label" parent="RadiationPanel/Content"]
+text = "Sicher · Dosis 0"
+theme_override_font_sizes/font_size = 12

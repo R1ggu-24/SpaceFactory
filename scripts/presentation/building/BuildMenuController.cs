@@ -15,12 +15,14 @@ public partial class BuildMenuController : CanvasLayer
     private BoxContainer _body = null!;
     private PanelContainer _categoryPanel = null!;
     private VBoxContainer _categoryButtonsContainer = null!;
-    private ScrollContainer _catalogScroll = null!;
+    private MarginContainer _catalogViewport = null!;
     private GridContainer _cardGrid = null!;
     private Label _catalogTitle = null!;
     private Label _catalogCount = null!;
-    private Label _status = null!;
-    private Label _footerHint = null!;
+    private HBoxContainer _pageBar = null!;
+    private Button _previousPage = null!;
+    private Button _nextPage = null!;
+    private Label _pageLabel = null!;
     private Button _close = null!;
     private IReadOnlyList<BuildMachineViewModel> _machines = [];
     private BuildMenuCategory _selectedCategory = BuildMenuCategory.Processing;
@@ -29,6 +31,8 @@ public partial class BuildMenuController : CanvasLayer
     private bool _isOpen;
     private bool _isClosing;
     private string _buildActionLabel = "B";
+    private int _pageIndex;
+    private int _pageSize = 1;
 
     public bool IsOpen => _isOpen || _isClosing;
 
@@ -49,12 +53,14 @@ public partial class BuildMenuController : CanvasLayer
         _body = GetNode<BoxContainer>("Overlay/SafeArea/Frame/FrameMargin/Layout/Body");
         _categoryPanel = GetNode<PanelContainer>("Overlay/SafeArea/Frame/FrameMargin/Layout/Body/CategoryPanel");
         _categoryButtonsContainer = GetNode<VBoxContainer>("Overlay/SafeArea/Frame/FrameMargin/Layout/Body/CategoryPanel/Margin/Layout/CategoryButtons");
-        _catalogScroll = GetNode<ScrollContainer>("Overlay/SafeArea/Frame/FrameMargin/Layout/Body/CatalogScroll");
+        _catalogViewport = GetNode<MarginContainer>("Overlay/SafeArea/Frame/FrameMargin/Layout/Body/CatalogScroll");
         _cardGrid = GetNode<GridContainer>("Overlay/SafeArea/Frame/FrameMargin/Layout/Body/CatalogScroll/Catalog/Cards");
         _catalogTitle = GetNode<Label>("Overlay/SafeArea/Frame/FrameMargin/Layout/Body/CatalogScroll/Catalog/Header/Title");
         _catalogCount = GetNode<Label>("Overlay/SafeArea/Frame/FrameMargin/Layout/Body/CatalogScroll/Catalog/Header/Count");
-        _status = GetNode<Label>("Overlay/SafeArea/Frame/FrameMargin/Layout/Footer/Status");
-        _footerHint = GetNode<Label>("Overlay/SafeArea/Frame/FrameMargin/Layout/Footer/Hint");
+        _pageBar = GetNode<HBoxContainer>("Overlay/SafeArea/Frame/FrameMargin/Layout/Body/CatalogScroll/Catalog/Pages");
+        _previousPage = GetNode<Button>("Overlay/SafeArea/Frame/FrameMargin/Layout/Body/CatalogScroll/Catalog/Pages/Previous");
+        _nextPage = GetNode<Button>("Overlay/SafeArea/Frame/FrameMargin/Layout/Body/CatalogScroll/Catalog/Pages/Next");
+        _pageLabel = GetNode<Label>("Overlay/SafeArea/Frame/FrameMargin/Layout/Body/CatalogScroll/Catalog/Pages/Label");
         _close = GetNode<Button>("Overlay/SafeArea/Frame/FrameMargin/Layout/Header/Close");
 
         _safeArea.Theme = BuildingUiTheme.CreateTheme();
@@ -63,6 +69,8 @@ public partial class BuildMenuController : CanvasLayer
             "panel",
             BuildingUiTheme.CreatePanelStyle(BuildingUiTheme.PanelBackground, BuildingUiTheme.AccentMuted));
         _close.Pressed += Close;
+        _previousPage.Pressed += ShowPreviousPage;
+        _nextPage.Pressed += ShowNextPage;
         _frame.Resized += UpdateFramePivot;
         GetViewport().SizeChanged += UpdateResponsiveLayout;
         BuildCategoryButtons();
@@ -77,6 +85,8 @@ public partial class BuildMenuController : CanvasLayer
     public override void _ExitTree()
     {
         _close.Pressed -= Close;
+        _previousPage.Pressed -= ShowPreviousPage;
+        _nextPage.Pressed -= ShowNextPage;
         _frame.Resized -= UpdateFramePivot;
         GetViewport().SizeChanged -= UpdateResponsiveLayout;
         _transitionTween?.Kill();
@@ -107,7 +117,10 @@ public partial class BuildMenuController : CanvasLayer
             throw new ArgumentException($"Duplicate machine id '{duplicate.Key}'.", nameof(machines));
         }
 
-        _machines = machines.ToArray();
+        // Research state is resolved before the catalog reaches this view. Keep
+        // the boundary defensive so previews cannot leak a locked entry.
+        _machines = machines.Where(machine => machine.IsUnlocked).ToArray();
+        EnsureSelectedCategoryHasContent();
         if (_ready)
         {
             RebuildCards();
@@ -120,12 +133,6 @@ public partial class BuildMenuController : CanvasLayer
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(actionLabel);
         _buildActionLabel = actionLabel.Trim();
-        if (!_ready)
-        {
-            return;
-        }
-
-        _footerHint.Text = $"{_buildActionLabel.ToUpperInvariant()} / ESC  SCHLIESSEN";
     }
 
     public void Open()
@@ -188,12 +195,18 @@ public partial class BuildMenuController : CanvasLayer
 
     public void SelectCategory(BuildMenuCategory category)
     {
+        if (!_machines.Any(machine => machine.Category == category))
+        {
+            return;
+        }
+
         if (_selectedCategory == category && _cards.Count > 0)
         {
             return;
         }
 
         _selectedCategory = category;
+        _pageIndex = 0;
         RebuildCards();
     }
 
@@ -214,7 +227,8 @@ public partial class BuildMenuController : CanvasLayer
                 throw new InvalidOperationException("Build menu did not construct all six category controls.");
             }
 
-            foreach (var category in BuildMenuCategoryPresentation.OrderedCategories)
+            foreach (var category in BuildMenuCategoryPresentation.OrderedCategories
+                         .Where(category => _machines.Any(machine => machine.Category == category)))
             {
                 SelectCategory(category);
                 var expected = _machines.Count(machine => machine.Category == category);
@@ -224,19 +238,27 @@ public partial class BuildMenuController : CanvasLayer
                 }
             }
 
+            if (_machines.Any(machine => !machine.IsUnlocked) ||
+                _machines.Any(machine => machine.MachineId == "research") ||
+                _categoryButtons[BuildMenuCategory.Research].Visible)
+            {
+                throw new InvalidOperationException("Locked machines or their empty category remain visible.");
+            }
+
             Vector2[] viewportSizes = [new(800, 600), new(1366, 768), new(1920, 1080), new(2560, 1440)];
             foreach (var size in viewportSizes)
             {
                 var metrics = CalculateResponsiveMetrics(size);
-                if (metrics.Columns < 1 || metrics.SafeMargin < 10 || metrics.SafeMargin >= size.X * 0.2f)
+                if (metrics.Columns < 1 || metrics.Rows < 1 ||
+                    metrics.SafeMargin < 10 || metrics.SafeMargin >= size.X * 0.2f)
                 {
                     throw new InvalidOperationException($"Invalid build menu layout at {size.X}x{size.Y}.");
                 }
             }
 
-            if (_catalogScroll.HorizontalScrollMode != ScrollContainer.ScrollMode.Disabled)
+            if (GetNode("Overlay/SafeArea/Frame/FrameMargin/Layout/Body/CatalogScroll") is ScrollContainer)
             {
-                throw new InvalidOperationException("Build menu must never expose a horizontal catalog scrollbar.");
+                throw new InvalidOperationException("Build menu must never expose a catalog scrollbar.");
             }
         }
         finally
@@ -247,7 +269,7 @@ public partial class BuildMenuController : CanvasLayer
             RefreshCategoryCounts();
         }
 
-        GD.Print("BUILD_MENU_UI_SMOKE_OK: 6 categories, machines/logistics, responsive 800-2560, no horizontal overflow");
+        GD.Print("BUILD_MENU_UI_SMOKE_OK: unlocked machines only, empty categories hidden, responsive pagination 800-2560, no scrollbars");
     }
 
     private void BuildCategoryButtons()
@@ -277,6 +299,7 @@ public partial class BuildMenuController : CanvasLayer
         {
             var count = _machines.Count(machine => machine.Category == category);
             button.Text = $"{BuildMenuCategoryPresentation.GetDisplayName(category)}   {count:00}";
+            button.Visible = count > 0;
             button.ButtonPressed = category == _selectedCategory;
         }
     }
@@ -287,6 +310,8 @@ public partial class BuildMenuController : CanvasLayer
         {
             return;
         }
+
+        EnsureSelectedCategoryHasContent();
 
         foreach (var card in _cards)
         {
@@ -313,12 +338,25 @@ public partial class BuildMenuController : CanvasLayer
         _catalogCount.Text = _selectedCategory == BuildMenuCategory.Logistics
             ? $"{_cards.Count:00} VERBINDUNGEN"
             : $"{_cards.Count:00} MASCHINEN";
-        _status.Text = _cards.Count == 0
-            ? "In dieser Kategorie sind noch keine Maschinen verfügbar."
-            : _selectedCategory == BuildMenuCategory.Logistics
-                ? "Wähle einen Verbindungstyp und danach Ausgangs- und Zielmaschine."
-                : "Wähle eine Maschine, um den Platzierungsmodus zu starten.";
         RefreshCategoryCounts();
+        ApplyPagination();
+    }
+
+    private void EnsureSelectedCategoryHasContent()
+    {
+        if (_machines.Any(machine => machine.Category == _selectedCategory))
+        {
+            return;
+        }
+
+        foreach (var category in BuildMenuCategoryPresentation.OrderedCategories)
+        {
+            if (_machines.Any(machine => machine.Category == category))
+            {
+                _selectedCategory = category;
+                return;
+            }
+        }
     }
 
     private void HandleMachineSelected(string machineId)
@@ -343,7 +381,8 @@ public partial class BuildMenuController : CanvasLayer
         _cardGrid.Columns = metrics.Columns;
         _cardGrid.AddThemeConstantOverride("h_separation", metrics.Compact ? 10 : 14);
         _cardGrid.AddThemeConstantOverride("v_separation", metrics.Compact ? 10 : 14);
-        _catalogScroll.ScrollHorizontal = 0;
+        _pageSize = Math.Max(1, metrics.Columns * metrics.Rows);
+        ApplyPagination();
         foreach (var card in _cards)
         {
             card.SetCompact(metrics.Compact);
@@ -361,7 +400,43 @@ public partial class BuildMenuController : CanvasLayer
         var categoryWidth = compact ? 204 : 228;
         var availableCardWidth = width - (2 * safeMargin) - (2 * frameMargin) - (stacked ? 0 : categoryWidth + 18);
         var columns = availableCardWidth >= 1_080 ? 3 : availableCardWidth >= 690 ? 2 : 1;
-        return new ResponsiveMetrics(stacked, compact, columns, safeMargin, frameMargin, categoryWidth);
+        var rows = height >= 1180 ? 3 : height >= 850 ? 2 : 1;
+        return new ResponsiveMetrics(stacked, compact, columns, rows, safeMargin, frameMargin, categoryWidth);
+    }
+
+    private void ShowPreviousPage()
+    {
+        _pageIndex = Math.Max(0, _pageIndex - 1);
+        ApplyPagination();
+    }
+
+    private void ShowNextPage()
+    {
+        var pageCount = Math.Max(1, (int)Math.Ceiling(_cards.Count / (double)Math.Max(1, _pageSize)));
+        _pageIndex = Math.Min(pageCount - 1, _pageIndex + 1);
+        ApplyPagination();
+    }
+
+    private void ApplyPagination()
+    {
+        if (!_ready)
+        {
+            return;
+        }
+
+        var safePageSize = Math.Max(1, _pageSize);
+        var pageCount = Math.Max(1, (int)Math.Ceiling(_cards.Count / (double)safePageSize));
+        _pageIndex = Math.Clamp(_pageIndex, 0, pageCount - 1);
+        var first = _pageIndex * safePageSize;
+        for (var index = 0; index < _cards.Count; index++)
+        {
+            _cards[index].Visible = index >= first && index < first + safePageSize;
+        }
+
+        _pageBar.Visible = pageCount > 1;
+        _pageLabel.Text = $"{_pageIndex + 1:00} / {pageCount:00}";
+        _previousPage.Disabled = _pageIndex == 0;
+        _nextPage.Disabled = _pageIndex >= pageCount - 1;
     }
 
     private static void SetMargins(MarginContainer container, int margin)
@@ -411,6 +486,7 @@ public partial class BuildMenuController : CanvasLayer
         bool Stacked,
         bool Compact,
         int Columns,
+        int Rows,
         int SafeMargin,
         int FrameMargin,
         int CategoryWidth);

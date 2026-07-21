@@ -76,16 +76,6 @@ theme_override_colors/font_color = Color(0.86, 0.95, 0.98, 1)
 theme_override_font_sizes/font_size = 25
 text = "BAUMENÜ"
 
-[node name="Info" type="Label" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Header"]
-layout_mode = 2
-size_flags_horizontal = 3
-theme_override_colors/font_color = Color(0.43, 0.62, 0.69, 1)
-theme_override_font_sizes/font_size = 11
-text = "BAUKOSTEN WERDEN AUS DEM ASTRONAUTEN-INVENTAR GEPRÜFT"
-horizontal_alignment = 2
-vertical_alignment = 1
-autowrap_mode = 2
-
 [node name="Close" type="Button" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Header"]
 custom_minimum_size = Vector2(42, 42)
 layout_mode = 2
@@ -129,12 +119,11 @@ layout_mode = 2
 size_flags_vertical = 3
 theme_override_constants/separation = 7
 
-[node name="CatalogScroll" type="ScrollContainer" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Body"]
+[node name="CatalogScroll" type="MarginContainer" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Body"]
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_vertical = 3
-horizontal_scroll_mode = 0
-vertical_scroll_mode = 1
+mouse_filter = 2
 
 [node name="Catalog" type="VBoxContainer" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Body/CatalogScroll"]
 layout_mode = 2
@@ -165,23 +154,30 @@ theme_override_constants/h_separation = 14
 theme_override_constants/v_separation = 14
 columns = 2
 
-[node name="Footer" type="HBoxContainer" parent="Overlay/SafeArea/Frame/FrameMargin/Layout"]
+[node name="Pages" type="HBoxContainer" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Body/CatalogScroll/Catalog"]
 layout_mode = 2
-theme_override_constants/separation = 12
+alignment = 1
+theme_override_constants/separation = 10
 
-[node name="Status" type="Label" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Footer"]
+[node name="Previous" type="Button" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Body/CatalogScroll/Catalog/Pages"]
+custom_minimum_size = Vector2(38, 34)
 layout_mode = 2
-size_flags_horizontal = 3
-theme_override_colors/font_color = Color(0.35, 0.74, 0.86, 1)
-theme_override_font_sizes/font_size = 11
-text = "Wähle eine Maschine, um den Platzierungsmodus zu starten."
-clip_text = true
-text_overrun_behavior = 3
+focus_mode = 0
+tooltip_text = "Vorherige Seite"
+text = "‹"
 
-[node name="Hint" type="Label" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Footer"]
+[node name="Label" type="Label" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Body/CatalogScroll/Catalog/Pages"]
+custom_minimum_size = Vector2(96, 34)
 layout_mode = 2
 theme_override_colors/font_color = Color(0.43, 0.57, 0.62, 1)
-theme_override_font_sizes/font_size = 10
-text = "B / ESC  SCHLIESSEN"
-horizontal_alignment = 2
+theme_override_font_sizes/font_size = 11
+text = "01 / 01"
+horizontal_alignment = 1
+vertical_alignment = 1
 
+[node name="Next" type="Button" parent="Overlay/SafeArea/Frame/FrameMargin/Layout/Body/CatalogScroll/Catalog/Pages"]
+custom_minimum_size = Vector2(38, 34)
+layout_mode = 2
+focus_mode = 0
+tooltip_text = "Nächste Seite"
+text = "›"

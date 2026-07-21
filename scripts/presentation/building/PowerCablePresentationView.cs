@@ -40,6 +40,7 @@ public partial class PowerCablePresentationView : Node2D
     private float _bendDirection = 1;
     private float _flowPhase;
     private float _activeVisualRemaining;
+    private float _dismantlingProgress;
     private float _utilization;
     private bool _isEnabled = true;
     private bool _isEnergized;
@@ -64,7 +65,7 @@ public partial class PowerCablePresentationView : Node2D
     public override void _Process(double delta)
     {
         var redraw = _trackEndpoints;
-        if (_activeVisualRemaining > 0)
+        if (_activeVisualRemaining > 0 || _dismantlingProgress > 0)
         {
             _activeVisualRemaining = Math.Max(0, _activeVisualRemaining - (float)delta);
             _flowPhase = Mathf.PosMod(_flowPhase + ((float)delta * PulseSpeed), 52);
@@ -166,7 +167,38 @@ public partial class PowerCablePresentationView : Node2D
         QueueRedraw();
     }
 
+    /// <summary>
+    /// Sets a non-destructive dismantling preview. The gameplay graph and inventory transaction
+    /// remain untouched until the runtime commits removal after reaching one.
+    /// </summary>
+    public void SetDismantlingProgress(float progress)
+    {
+        var normalized = float.IsFinite(progress) ? Math.Clamp(progress, 0, 1) : 0;
+        if (Mathf.IsEqualApprox(_dismantlingProgress, normalized))
+        {
+            return;
+        }
+
+        _dismantlingProgress = normalized;
+        RefreshProcessingState();
+        QueueRedraw();
+    }
+
     public void RefreshEndpoints() => QueueRedraw();
+
+    public float DistanceToWorldPoint(Vector2 worldPoint)
+    {
+        if (_first is null || _second is null || !_first.IsValid || !_second.IsValid)
+        {
+            return float.PositiveInfinity;
+        }
+
+        var route = PowerCableDrawing.CreateCurve(
+            ToLocal(_first.GetWorldPosition()),
+            ToLocal(_second.GetWorldPosition()),
+            _bendDirection);
+        return DistanceToRoute(ToLocal(worldPoint), route);
+    }
 
     public override void _Draw()
     {
@@ -180,10 +212,38 @@ public partial class PowerCablePresentationView : Node2D
         var route = PowerCableDrawing.CreateCurve(source, target, _bendDirection);
         var active = _isEnabled && _isEnergized && _activeVisualRemaining > 0;
         PowerCableDrawing.DrawCable(this, route, active, _utilization, _flowPhase);
+        if (_dismantlingProgress > 0)
+        {
+            DrawDismantlingOverlay(route);
+        }
     }
 
     private void RefreshProcessingState() =>
-        SetProcess(_trackEndpoints || _activeVisualRemaining > 0);
+        SetProcess(_trackEndpoints || _activeVisualRemaining > 0 || _dismantlingProgress > 0);
+
+    private void DrawDismantlingOverlay(IReadOnlyList<Vector2> route)
+    {
+        var totalLength = PowerCableDrawing.GetRouteLength(route);
+        if (totalLength <= 0.01f)
+        {
+            return;
+        }
+
+        var energy = new Color(0.2f, 0.92f, 1f, 0.45f + (_dismantlingProgress * 0.45f));
+        var completedLength = totalLength * _dismantlingProgress;
+        const float spacing = 16;
+        for (var distance = 0f; distance <= completedLength; distance += spacing)
+        {
+            var point = PowerCableDrawing.GetPointAlongRoute(route, distance);
+            var ahead = PowerCableDrawing.GetPointAlongRoute(route, Math.Min(totalLength, distance + 5));
+            var direction = (ahead - point).Normalized();
+            var side = direction == Vector2.Zero ? Vector2.Up : direction.Orthogonal();
+            var separation = 2 + (_dismantlingProgress * 4);
+            DrawLine(point - (side * separation), ahead - (side * separation), energy, 1.8f, true);
+            DrawLine(point + (side * separation), ahead + (side * separation), energy, 1.1f, true);
+            DrawCircle(point + (side * Mathf.Sin(_flowPhase + distance) * 4), 1.8f, energy);
+        }
+    }
 
     private static float CalculateStableBendDirection(string value)
     {
@@ -199,6 +259,23 @@ public partial class PowerCablePresentationView : Node2D
 
     private static string SanitizeNodeName(string value) =>
         value.Replace(':', '_').Replace('/', '_').Replace('\\', '_');
+
+    private static float DistanceToRoute(Vector2 point, IReadOnlyList<Vector2> route)
+    {
+        var closest = float.PositiveInfinity;
+        for (var index = 1; index < route.Count; index++)
+        {
+            var start = route[index - 1];
+            var delta = route[index] - start;
+            var lengthSquared = delta.LengthSquared();
+            var t = lengthSquared <= 0.0001f
+                ? 0
+                : Math.Clamp((point - start).Dot(delta) / lengthSquared, 0, 1);
+            closest = Math.Min(closest, point.DistanceTo(start + (delta * t)));
+        }
+
+        return closest;
+    }
 }
 
 internal static class PowerCableDrawing
@@ -291,7 +368,7 @@ internal static class PowerCableDrawing
         }
     }
 
-    private static float GetRouteLength(IReadOnlyList<Vector2> route)
+    internal static float GetRouteLength(IReadOnlyList<Vector2> route)
     {
         var length = 0f;
         for (var index = 1; index < route.Count; index++)
@@ -302,7 +379,7 @@ internal static class PowerCableDrawing
         return length;
     }
 
-    private static Vector2 GetPointAlongRoute(IReadOnlyList<Vector2> route, float distance)
+    internal static Vector2 GetPointAlongRoute(IReadOnlyList<Vector2> route, float distance)
     {
         var remaining = Math.Max(0, distance);
         for (var index = 1; index < route.Count; index++)

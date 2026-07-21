@@ -61,6 +61,7 @@ public partial class WorldMapController : Control
         landableFilter.Toggled += _mapCanvas.SetLandableOnly;
         closeButton.Pressed += Close;
         _mapCanvas.TargetSelectionRequested += HandleTargetSelection;
+        _mapCanvas.MarkerTargetSelectionRequested += HandleMarkerTargetSelection;
         _mapCanvas.MarkerPlacementRequested += HandleMarkerPlacement;
         _mapCanvas.ShipFollowingChanged += HandleShipFollowingChanged;
         _minimap.OpenMapRequested += RequestOpenFromMinimap;
@@ -138,6 +139,12 @@ public partial class WorldMapController : Control
         {
             _mapCanvas.SetShipState(ship);
         }
+
+        if (ship.IsInShip && _dataSource?.TryCompleteNavigation(ship.Position) == true)
+        {
+            TargetChanged?.Invoke(null);
+        }
+
         RefreshMinimapData();
         _navigationArrow.SetShipState(ship);
         if (!ship.IsInShip && IsOpen)
@@ -247,6 +254,7 @@ public partial class WorldMapController : Control
             _flightRoute.ToArray(),
             _ship,
             _dataSource.SelectedTargetCometId,
+            _dataSource.SelectedTargetMarkerId,
             _dataSource.LastDiscoveredComet?.Id);
     }
 
@@ -259,7 +267,7 @@ public partial class WorldMapController : Control
         _navigationArrow.SetSnapshot(snapshot);
         _status.Text = $"{snapshot.Chunks.Count} BEREICHE GESCANNT  |  {snapshot.Comets.Count} KOMETEN ENTDECKT";
         _focusLastButton.Disabled = snapshot.FindComet(snapshot.LastDiscoveredCometId) is null;
-        _clearTargetButton.Disabled = snapshot.FindComet(snapshot.ActiveTargetCometId) is null;
+        _clearTargetButton.Disabled = !snapshot.HasActiveTarget;
     }
 
     private void HandleDiscoveryChanged() => ApplySnapshot(BuildViewState());
@@ -275,11 +283,37 @@ public partial class WorldMapController : Control
         }
         else
         {
-            _snapshot = _snapshot with { ActiveTargetCometId = cometId };
+            _snapshot = _snapshot with
+            {
+                ActiveTargetCometId = cometId,
+                ActiveTargetMarkerId = null,
+            };
             ApplySnapshot(_snapshot);
         }
 
         TargetChanged?.Invoke(cometId);
+    }
+
+    private void HandleMarkerTargetSelection(string? markerId)
+    {
+        if (_dataSource is not null)
+        {
+            if (!_dataSource.SelectMarkerTarget(markerId))
+            {
+                return;
+            }
+        }
+        else
+        {
+            _snapshot = _snapshot with
+            {
+                ActiveTargetCometId = null,
+                ActiveTargetMarkerId = markerId,
+            };
+            ApplySnapshot(_snapshot);
+        }
+
+        TargetChanged?.Invoke(markerId);
     }
 
     private void HandleMarkerPlacement(WorldPosition position)

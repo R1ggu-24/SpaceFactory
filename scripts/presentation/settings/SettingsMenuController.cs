@@ -27,12 +27,17 @@ public partial class SettingsMenuController : CanvasLayer
 
     private static readonly int[] RefreshRates = [60, 75, 120, 144, 165, 240];
     private static readonly int[] FpsLimits = [0, 30, 60, 120, 144, 165, 240];
+    private const int KeyboardRowsPerPage = 6;
+    private const int VideoPageCount = 3;
     private readonly List<Control> _focusableControls = [];
     private IGameSettingsStore _store = null!;
     private SettingsRuntimeApplier _runtime = null!;
     private GameSettings _saved = null!;
     private GameSettings _draft = null!;
+    private MarginContainer _safeArea = null!;
+    private MarginContainer _frameMargin = null!;
     private VBoxContainer _content = null!;
+    private Button _infoButton = null!;
     private Label _section = null!;
     private Label _status = null!;
     private ColorRect _modalShade = null!;
@@ -49,16 +54,26 @@ public partial class SettingsMenuController : CanvasLayer
     private VideoSettings? _pendingVideo;
     private double _videoConfirmationRemaining;
     private double _audioSaveDelay;
+    private int _keyboardPageIndex;
+    private int _videoPageIndex;
+    private bool _ready;
 
     public bool IsOpen => Visible;
+
+    public bool HotbarMouseWheelEnabled => _saved.HotbarMouseWheelEnabled;
 
     public event Action? Closed;
 
     public event Action? InputBindingsChanged;
 
+    public event Action? InfoRequested;
+
     public override void _Ready()
     {
-        _content = GetNode<VBoxContainer>("SafeArea/Frame/FrameMargin/Layout/Scroll/Content");
+        _safeArea = GetNode<MarginContainer>("SafeArea");
+        _frameMargin = GetNode<MarginContainer>("SafeArea/Frame/FrameMargin");
+        _content = GetNode<VBoxContainer>("SafeArea/Frame/FrameMargin/Layout/Content");
+        _infoButton = GetNode<Button>("SafeArea/Frame/FrameMargin/Layout/Header/Info");
         _section = GetNode<Label>("SafeArea/Frame/FrameMargin/Layout/Header/Section");
         _status = GetNode<Label>("SafeArea/Frame/FrameMargin/Layout/Footer/Status");
         _modalShade = GetNode<ColorRect>("ModalShade");
@@ -80,8 +95,21 @@ public partial class SettingsMenuController : CanvasLayer
 
         _audioTestPlayer = new AudioStreamPlayer { Bus = "UI" };
         AddChild(_audioTestPlayer);
+        _infoButton.Pressed += OpenInfoMenu;
+        GetViewport().SizeChanged += UpdateResponsiveLayout;
+        _ready = true;
         BuildMainPage();
+        UpdateResponsiveLayout();
         Visible = false;
+    }
+
+    public override void _ExitTree()
+    {
+        if (_ready)
+        {
+            _infoButton.Pressed -= OpenInfoMenu;
+            GetViewport().SizeChanged -= UpdateResponsiveLayout;
+        }
     }
 
     public override void _Process(double delta)
@@ -178,17 +206,17 @@ public partial class SettingsMenuController : CanvasLayer
         FocusFirst();
     }
 
+    public void CloseImmediately()
+    {
+        Visible = false;
+        FlushPendingAudioSave();
+        GetViewport().GuiReleaseFocus();
+    }
+
     public void NavigateBackOrClose()
     {
-        if (_captureAction is not null)
+        if (TryCloseTransientUi())
         {
-            CancelBindingCapture();
-            return;
-        }
-
-        if (_modalShade.Visible)
-        {
-            (_modalCancelAction ?? HideModal).Invoke();
             return;
         }
 
@@ -204,15 +232,75 @@ public partial class SettingsMenuController : CanvasLayer
         Closed?.Invoke();
     }
 
+    /// <summary>
+    /// Closes the deepest settings sub-state before page navigation is allowed.
+    /// This keeps Escape deterministic for key capture, dialogs and native
+    /// option popups instead of accidentally leaving the complete page.
+    /// </summary>
+    public bool TryCloseTransientUi()
+    {
+        if (_captureAction is not null)
+        {
+            CancelBindingCapture();
+            return true;
+        }
+
+        if (_modalShade.Visible)
+        {
+            (_modalCancelAction ?? HideModal).Invoke();
+            return true;
+        }
+
+        if (GetViewport().GuiGetFocusOwner() is OptionButton option && option.GetPopup().Visible)
+        {
+            option.GetPopup().Hide();
+            option.GrabFocus();
+            return true;
+        }
+
+        return false;
+    }
+
 #if DEBUG
     public void RunConstructionSmokeTest()
     {
         Open();
-        BuildKeyboardPage();
+        for (var page = 0; page < GetKeyboardPageCount(); page++)
+        {
+            _keyboardPageIndex = page;
+            BuildKeyboardPage();
+        }
+
         BuildAudioPage();
-        BuildVideoPage();
+        for (var page = 0; page < VideoPageCount; page++)
+        {
+            _videoPageIndex = page;
+            BuildVideoPage();
+        }
+
+        if (ContainsScrollContainer(GetNode("SafeArea/Frame")))
+        {
+            throw new InvalidOperationException("Settings pages must not contain a ScrollContainer.");
+        }
+
+        Vector2[] desktopSizes = [new(1366, 768), new(1920, 1080), new(2560, 1440)];
+        foreach (var viewportSize in desktopSizes)
+        {
+            ValidateDesktopMetrics(viewportSize, CalculateResponsiveMetrics(viewportSize));
+        }
+
         ShowQuitConfirmation();
-        HideModal();
+        if (!TryCloseTransientUi() || _modalShade.Visible)
+        {
+            throw new InvalidOperationException("Escape hierarchy did not close the settings modal first.");
+        }
+
+        BuildKeyboardPage();
+        NavigateBackOrClose();
+        if (!Visible || _page != SettingsPage.Main)
+        {
+            throw new InvalidOperationException("Escape hierarchy did not return a settings subpage to the pause start page.");
+        }
 
         var alternateResolution = _saved.Video.Resolution == Resolutions[0]
             ? Resolutions[1]
@@ -221,8 +309,14 @@ public partial class SettingsMenuController : CanvasLayer
         ApplyVideoSettings();
         RevertPendingVideo("Smoke-Test-Rücksetzung");
         BuildMainPage();
+        if (!_infoButton.Visible || _infoButton.Text != "[i]" ||
+            _infoButton.CustomMinimumSize.X > 48 || _infoButton.CustomMinimumSize.Y > 48 ||
+            _content.GetChildren().OfType<Button>().Any(button => button.Text.Contains("INFO", StringComparison.OrdinalIgnoreCase)))
+        {
+            throw new InvalidOperationException("Info must be a compact header icon instead of a full-width menu row.");
+        }
         NavigateBackOrClose();
-        GD.Print("SETTINGS_SMOKE_OK: main, keyboard, audio, video, dialogs, pause-close");
+        GD.Print("SETTINGS_SMOKE_OK: compact info icon, hierarchical Escape, paged keyboard/video, no-scroll desktop layouts");
     }
 #endif
 
@@ -233,18 +327,41 @@ public partial class SettingsMenuController : CanvasLayer
         AddMainButton(
             "TASTATUREINSTELLUNGEN",
             "res://assets/ui/settings/keyboard.svg",
-            BuildKeyboardPage);
+            OpenKeyboardPage);
         AddMainButton("AUDIO", "res://assets/ui/settings/audio.svg", BuildAudioPage);
-        AddMainButton("VIDEO", "res://assets/ui/settings/video.svg", BuildVideoPage);
+        AddMainButton("VIDEO", "res://assets/ui/settings/video.svg", OpenVideoPage);
         AddMainButton("SPIEL VERLASSEN", "res://assets/ui/settings/exit.svg", ShowQuitConfirmation);
+        RegisterFocusable(_infoButton);
         _status.Text = "Einstellungen werden lokal und dauerhaft gespeichert.";
         FocusFirst();
+    }
+
+    private void OpenKeyboardPage()
+    {
+        _keyboardPageIndex = 0;
+        BuildKeyboardPage();
+    }
+
+    private void OpenVideoPage()
+    {
+        _videoPageIndex = 0;
+        BuildVideoPage();
+    }
+
+    private void OpenInfoMenu()
+    {
+        CloseImmediately();
+        InfoRequested?.Invoke();
     }
 
     private void BuildKeyboardPage()
     {
         BeginPage(SettingsPage.Keyboard, "TASTATUREINSTELLUNGEN");
-        foreach (var definition in InputActionCatalog.All)
+        var pageCount = GetKeyboardPageCount();
+        _keyboardPageIndex = Math.Clamp(_keyboardPageIndex, 0, pageCount - 1);
+        foreach (var definition in InputActionCatalog.All
+                     .Skip(_keyboardPageIndex * KeyboardRowsPerPage)
+                     .Take(KeyboardRowsPerPage))
         {
             var row = CreateSettingRow();
             var label = new Label
@@ -254,7 +371,7 @@ public partial class SettingsMenuController : CanvasLayer
                 VerticalAlignment = VerticalAlignment.Center,
             };
             var bindingButton = CreateButton(InputBindingFormatter.Format(_draft.Input.GetBinding(definition.Action)));
-            bindingButton.CustomMinimumSize = new Vector2(230, 46);
+            bindingButton.CustomMinimumSize = new Vector2(230, 42);
             var action = definition.Action;
             bindingButton.Pressed += () => BeginBindingCapture(action, bindingButton);
             row.AddChild(label);
@@ -263,12 +380,26 @@ public partial class SettingsMenuController : CanvasLayer
             RegisterFocusable(bindingButton);
         }
 
+        AddToggleRow(
+            "Hotbar mit Mausrad wechseln",
+            _draft.HotbarMouseWheelEnabled,
+            enabled => _draft = _draft with { HotbarMouseWheelEnabled = enabled });
+
+        AddPageNavigation(
+            _keyboardPageIndex,
+            pageCount,
+            page =>
+            {
+                _keyboardPageIndex = page;
+                BuildKeyboardPage();
+            });
+
         var actions = CreateActionRow();
         actions.AddChild(CreateActionButton("STANDARD", ResetKeyboardDefaults));
         actions.AddChild(CreateActionButton("SPEICHERN", SaveKeyboardSettings, primary: true));
         actions.AddChild(CreateActionButton("ZURÜCK", BuildMainPage));
         _content.AddChild(actions);
-        _status.Text = "Belegung anklicken und anschließend eine Taste oder Maustaste drücken.";
+        _status.Text = $"Tastenbelegungen {_keyboardPageIndex + 1} / {pageCount}";
         FocusFirst();
     }
 
@@ -302,6 +433,41 @@ public partial class SettingsMenuController : CanvasLayer
     private void BuildVideoPage()
     {
         BeginPage(SettingsPage.Video, "VIDEO");
+        _videoPageIndex = Math.Clamp(_videoPageIndex, 0, VideoPageCount - 1);
+        switch (_videoPageIndex)
+        {
+            case 0:
+                AddDisplayVideoRows();
+                break;
+            case 1:
+                AddQualityVideoRows();
+                break;
+            case 2:
+                AddInterfaceVideoRows();
+                break;
+        }
+
+        AddPageNavigation(
+            _videoPageIndex,
+            VideoPageCount,
+            page =>
+            {
+                _videoPageIndex = page;
+                BuildVideoPage();
+            });
+
+        var actions = CreateActionRow();
+        actions.AddChild(CreateActionButton("ANWENDEN", ApplyVideoSettings, primary: true));
+        actions.AddChild(CreateActionButton("VERWERFEN", DiscardVideoChanges));
+        actions.AddChild(CreateActionButton("STANDARDWERTE", RestoreVideoDefaults));
+        actions.AddChild(CreateActionButton("ZURÜCK", BuildMainPage));
+        _content.AddChild(actions);
+        _status.Text = $"Videoeinstellungen {_videoPageIndex + 1} / {VideoPageCount}";
+        FocusFirst();
+    }
+
+    private void AddDisplayVideoRows()
+    {
         AddOptionRow(
             "Auflösung",
             Resolutions.Select(value => $"{value.Width} × {value.Height}").ToArray(),
@@ -324,7 +490,10 @@ public partial class SettingsMenuController : CanvasLayer
             index => _draft = _draft with { Video = _draft.Video with { FpsLimit = FpsLimits[index] } });
         AddToggleRow("V-Sync", _draft.Video.VSyncEnabled,
             enabled => _draft = _draft with { Video = _draft.Video with { VSyncEnabled = enabled } });
+    }
 
+    private void AddQualityVideoRows()
+    {
         AddOptionRow(
             "Grafikqualität",
             ["Niedrig", "Mittel", "Hoch", "Ultra", "Benutzerdefiniert"],
@@ -342,6 +511,10 @@ public partial class SettingsMenuController : CanvasLayer
             quality => SetCustomVideo(_draft.Video with { EffectQuality = quality }));
         AddQualityRow("Partikeldichte", _draft.Video.ParticleDensity,
             quality => SetCustomVideo(_draft.Video with { ParticleDensity = quality }));
+    }
+
+    private void AddInterfaceVideoRows()
+    {
         AddOptionRow(
             "Kantenglättung",
             ["Aus", "FXAA", "MSAA 2×", "MSAA 4×", "MSAA 8×"],
@@ -351,21 +524,13 @@ public partial class SettingsMenuController : CanvasLayer
             value => _draft = _draft with { Video = _draft.Video with { BrightnessPercent = value } });
         AddVideoSlider("Benutzeroberflächen-Skalierung", _draft.Video.UserInterfaceScalePercent, 75, 150, "%",
             value => _draft = _draft with { Video = _draft.Video with { UserInterfaceScalePercent = value } });
-
-        var actions = CreateActionRow();
-        actions.AddChild(CreateActionButton("ANWENDEN", ApplyVideoSettings, primary: true));
-        actions.AddChild(CreateActionButton("VERWERFEN", DiscardVideoChanges));
-        actions.AddChild(CreateActionButton("STANDARDWERTE", RestoreVideoDefaults));
-        actions.AddChild(CreateActionButton("ZURÜCK", BuildMainPage));
-        _content.AddChild(actions);
-        _status.Text = "Fenstermodus und Auflösung müssen nach dem Anwenden bestätigt werden.";
-        FocusFirst();
     }
 
     private void BeginPage(SettingsPage page, string section)
     {
         _page = page;
         _section.Text = section;
+        _infoButton.Visible = page == SettingsPage.Main;
         _focusableControls.Clear();
         foreach (var child in _content.GetChildren())
         {
@@ -374,13 +539,17 @@ public partial class SettingsMenuController : CanvasLayer
         }
     }
 
-    private void AddMainButton(string text, string iconPath, Action action)
+    private void AddMainButton(string text, string? iconPath, Action action)
     {
         var button = CreateButton($"  {text}                                      ›");
-        button.CustomMinimumSize = new Vector2(0, 82);
+        button.CustomMinimumSize = new Vector2(0, 76);
         button.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
-        button.Icon = GD.Load<Texture2D>(iconPath);
-        button.ExpandIcon = true;
+        if (!string.IsNullOrWhiteSpace(iconPath))
+        {
+            button.Icon = GD.Load<Texture2D>(iconPath);
+            button.ExpandIcon = true;
+        }
+
         button.Alignment = HorizontalAlignment.Left;
         button.Pressed += action;
         _content.AddChild(button);
@@ -389,7 +558,7 @@ public partial class SettingsMenuController : CanvasLayer
 
     private HBoxContainer CreateSettingRow()
     {
-        var row = new HBoxContainer { CustomMinimumSize = new Vector2(0, 50) };
+        var row = new HBoxContainer { CustomMinimumSize = new Vector2(0, 42) };
         row.AddThemeConstantOverride("separation", 18);
         return row;
     }
@@ -398,11 +567,49 @@ public partial class SettingsMenuController : CanvasLayer
     {
         var row = new HBoxContainer
         {
-            CustomMinimumSize = new Vector2(0, 58),
+            CustomMinimumSize = new Vector2(0, 50),
             Alignment = BoxContainer.AlignmentMode.End,
         };
         row.AddThemeConstantOverride("separation", 12);
         return row;
+    }
+
+    private int GetKeyboardPageCount() =>
+        Math.Max(1, (int)Math.Ceiling(InputActionCatalog.All.Count / (double)KeyboardRowsPerPage));
+
+    private void AddPageNavigation(int currentPage, int pageCount, Action<int> selectPage)
+    {
+        var row = new HBoxContainer
+        {
+            CustomMinimumSize = new Vector2(0, 42),
+            Alignment = BoxContainer.AlignmentMode.Center,
+        };
+        row.AddThemeConstantOverride("separation", 12);
+
+        var previous = CreateButton("‹  ZURÜCK");
+        previous.CustomMinimumSize = new Vector2(142, 40);
+        previous.Disabled = currentPage <= 0;
+        previous.Pressed += () => selectPage(Math.Max(0, currentPage - 1));
+
+        var label = new Label
+        {
+            Text = $"SEITE {currentPage + 1} / {pageCount}",
+            CustomMinimumSize = new Vector2(150, 0),
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+
+        var next = CreateButton("WEITER  ›");
+        next.CustomMinimumSize = new Vector2(142, 40);
+        next.Disabled = currentPage >= pageCount - 1;
+        next.Pressed += () => selectPage(Math.Min(pageCount - 1, currentPage + 1));
+
+        row.AddChild(previous);
+        row.AddChild(label);
+        row.AddChild(next);
+        _content.AddChild(row);
+        RegisterFocusable(previous);
+        RegisterFocusable(next);
     }
 
     private Button CreateButton(string text) => new()
@@ -415,7 +622,7 @@ public partial class SettingsMenuController : CanvasLayer
     private Button CreateActionButton(string text, Action action, bool primary = false)
     {
         var button = CreateButton(text);
-        button.CustomMinimumSize = new Vector2(150, 46);
+        button.CustomMinimumSize = new Vector2(150, 42);
         if (primary)
         {
             button.AddThemeColorOverride("font_color", new Color(0.8f, 0.98f, 1));
@@ -550,7 +757,11 @@ public partial class SettingsMenuController : CanvasLayer
 
     private void ResetKeyboardDefaults()
     {
-        _draft = _draft with { Input = InputSettings.CreateDefault() };
+        _draft = _draft with
+        {
+            Input = InputSettings.CreateDefault(),
+            HotbarMouseWheelEnabled = true,
+        };
         BuildKeyboardPage();
         _status.Text = "Standardbelegungen vorgemerkt. Zum Übernehmen SPEICHERN wählen.";
     }
@@ -563,8 +774,16 @@ public partial class SettingsMenuController : CanvasLayer
             return;
         }
 
-        _saved = _saved with { Input = _draft.Input.Normalize() };
-        _draft = _draft with { Input = _saved.Input };
+        _saved = _saved with
+        {
+            Input = _draft.Input.Normalize(),
+            HotbarMouseWheelEnabled = _draft.HotbarMouseWheelEnabled,
+        };
+        _draft = _draft with
+        {
+            Input = _saved.Input,
+            HotbarMouseWheelEnabled = _saved.HotbarMouseWheelEnabled,
+        };
         _runtime.ApplyInput(_saved.Input);
         _store.Save(_saved);
         InputBindingsChanged?.Invoke();
@@ -903,6 +1122,71 @@ public partial class SettingsMenuController : CanvasLayer
         }
     }
 
+    private void UpdateResponsiveLayout()
+    {
+        if (!_ready)
+        {
+            return;
+        }
+
+        var metrics = CalculateResponsiveMetrics(GetViewport().GetVisibleRect().Size);
+        SetMargins(_safeArea, metrics.SafeMarginX, metrics.SafeMarginY);
+        SetMargins(_frameMargin, metrics.FrameMarginX, metrics.FrameMarginY);
+        _content.AddThemeConstantOverride("separation", metrics.ContentGap);
+    }
+
+    private static ResponsiveMetrics CalculateResponsiveMetrics(Vector2 viewportSize)
+    {
+        var width = Mathf.Max(1_024, viewportSize.X);
+        var height = Mathf.Max(700, viewportSize.Y);
+        var compact = width < 1_600 || height < 900;
+        return new ResponsiveMetrics(
+            SafeMarginX: Mathf.RoundToInt(Mathf.Clamp(width * 0.028f, 28, 72)),
+            SafeMarginY: Mathf.RoundToInt(Mathf.Clamp(height * 0.028f, 18, 46)),
+            FrameMarginX: compact ? 28 : 48,
+            FrameMarginY: compact ? 18 : 26,
+            ContentGap: compact ? 6 : 10);
+    }
+
+    private static void ValidateDesktopMetrics(Vector2 viewportSize, ResponsiveMetrics metrics)
+    {
+        var usableHeight = viewportSize.Y - (2 * metrics.SafeMarginY) - (2 * metrics.FrameMarginY);
+        // Six key rows, the wheel toggle, pagination and the action row are the
+        // tallest compact page. Header/footer reserve includes both separators.
+        var tallestPage = (7 * 42) + 42 + 50 + (8 * metrics.ContentGap) + 116;
+        if (tallestPage > usableHeight)
+        {
+            throw new InvalidOperationException(
+                $"Settings layout does not fit {viewportSize.X:0}x{viewportSize.Y:0} without scrolling.");
+        }
+    }
+
+    private static bool ContainsScrollContainer(Node node)
+    {
+        if (node is ScrollContainer)
+        {
+            return true;
+        }
+
+        foreach (var child in node.GetChildren())
+        {
+            if (ContainsScrollContainer(child))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static void SetMargins(MarginContainer container, int horizontal, int vertical)
+    {
+        container.AddThemeConstantOverride("margin_left", horizontal);
+        container.AddThemeConstantOverride("margin_right", horizontal);
+        container.AddThemeConstantOverride("margin_top", vertical);
+        container.AddThemeConstantOverride("margin_bottom", vertical);
+    }
+
     private static int FindResolutionIndex(ScreenResolution current)
     {
         for (var index = 0; index < Resolutions.Length; index++)
@@ -938,7 +1222,7 @@ public partial class SettingsMenuController : CanvasLayer
         previous.WindowMode != candidate.WindowMode ||
         previous.RefreshRate != candidate.RefreshRate;
 
-    private static Theme CreateSciFiTheme()
+    internal static Theme CreateSciFiTheme()
     {
         var theme = new Theme();
         theme.SetColor("font_color", "Label", new Color(0.82f, 0.9f, 0.94f));
@@ -978,4 +1262,11 @@ public partial class SettingsMenuController : CanvasLayer
     }
 
     private sealed record ModalAction(string Label, Action Callback, bool Primary = false);
+
+    private readonly record struct ResponsiveMetrics(
+        int SafeMarginX,
+        int SafeMarginY,
+        int FrameMarginX,
+        int FrameMarginY,
+        int ContentGap);
 }

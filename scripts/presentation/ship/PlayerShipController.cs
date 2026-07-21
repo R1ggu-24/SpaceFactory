@@ -13,7 +13,11 @@ public partial class PlayerShipController : CharacterBody2D
     public const float ShipCameraZoom = 0.22f;
     public const float NormalFlightSpeed = (float)ShipFlightConfiguration.NormalFlightSpeed;
     public const float BoostFlightSpeed = (float)ShipFlightConfiguration.BoostFlightSpeed;
+    public const float HighPerformanceBoostFlightSpeed =
+        (float)ShipFlightConfiguration.HighPerformanceBoostFlightSpeed;
     public const float BoostMultiplier = (float)ShipFlightConfiguration.BoostSpeedMultiplier;
+    public const float HighPerformanceBoostMultiplier =
+        (float)ShipFlightConfiguration.HighPerformanceBoostSpeedMultiplier;
     public const float CockpitEntryOffsetY = -165.0f;
     public const float DockingHullReach = 248.0f;
     public const float DockingCenterClearance = 270.0f;
@@ -43,13 +47,13 @@ public partial class PlayerShipController : CharacterBody2D
     private const float EngineEmitterY = 100.0f * VisualScaleMultiplier;
     private const string BoostAction = "ship_boost";
 
-    // The sockets sit just outside the aft side armour. Keeping the coordinates
-    // local to the CharacterBody makes them follow translation and rotation
-    // without a per-frame presentation update.
+    // The sockets sit on the middle section of both wings. Keeping the coordinates
+    // local to the CharacterBody makes their visuals, hit areas and cable anchors
+    // follow translation and rotation without a per-frame presentation update.
     private static readonly Vector2[] PowerPortAnchors =
     [
-        new(-238, 92),
-        new(238, 92),
+        new(-158, 72),
+        new(158, 72),
     ];
 
     private static readonly Color NormalGlowColor = new(0.08f, 0.46f, 1.0f, 0.34f);
@@ -186,7 +190,9 @@ public partial class PlayerShipController : CharacterBody2D
             _boostFuelWarningReported = false;
         }
 
-        var targetSpeed = IsBoostActive ? BoostMovementSpeed : MovementSpeed;
+        var targetSpeed = IsBoostActive
+            ? GetBoostMovementSpeed(FuelTank.CurrentFuelType)
+            : MovementSpeed;
         var targetVelocity = direction * targetSpeed;
         var isSlowingFromBoost = !IsBoostActive && Velocity.LengthSquared() > MovementSpeed * MovementSpeed;
         var velocityChange = !hasMovementInput
@@ -326,6 +332,13 @@ public partial class PlayerShipController : CharacterBody2D
     public void RestoreFuel(double currentFuel)
     {
         FuelTank.RestoreFuel(currentFuel);
+        _boostFuelWarningReported = false;
+        FuelChanged?.Invoke(FuelTank.CurrentFuel);
+    }
+
+    public void RestoreFuel(double currentFuel, ShipFuelType fuelType)
+    {
+        FuelTank.RestoreFuel(currentFuel, fuelType);
         _boostFuelWarningReported = false;
         FuelChanged?.Invoke(FuelTank.CurrentFuel);
     }
@@ -614,6 +627,14 @@ public partial class PlayerShipController : CharacterBody2D
 
         return isPressed;
     }
+
+    private float GetBoostMovementSpeed(ShipFuelType fuelType) => fuelType switch
+    {
+        ShipFuelType.Standard => BoostMovementSpeed,
+        ShipFuelType.HighPerformance =>
+            BoostMovementSpeed * (float)ShipFuelConfiguration.HighPerformanceBoostSpeedFactor,
+        _ => throw new ArgumentOutOfRangeException(nameof(fuelType), fuelType, null),
+    };
 
     private void SuppressBoostUntilReleased()
     {

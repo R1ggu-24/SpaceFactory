@@ -13,6 +13,8 @@ public partial class PowerMenuControl : Control
     private readonly Dictionary<string, SourceWidgets> _sourceWidgets = [];
     private PanelContainer _frame = null!;
     private GridContainer _metricGrid = null!;
+    private TabContainer _tabs = null!;
+    private BoxContainer _connectionsLayout = null!;
     private Label _title = null!;
     private Label _networkName = null!;
     private Label _status = null!;
@@ -167,22 +169,23 @@ public partial class PowerMenuControl : Control
         layout.AddChild(CreateHeader());
         layout.AddChild(CreateSeparator());
 
-        var bodyScroll = new ScrollContainer
+        _tabs = new TabContainer
         {
-            Name = "BodyScroll",
-            HorizontalScrollMode = ScrollContainer.ScrollMode.Disabled,
-            VerticalScrollMode = ScrollContainer.ScrollMode.Auto,
+            Name = "Pages",
+            TabsVisible = true,
+            SizeFlagsHorizontal = SizeFlags.ExpandFill,
             SizeFlagsVertical = SizeFlags.ExpandFill,
         };
-        layout.AddChild(bodyScroll);
+        layout.AddChild(_tabs);
 
-        var body = new VBoxContainer
+        var overview = new VBoxContainer
         {
-            Name = "Body",
+            Name = "ÜBERSICHT",
             SizeFlagsHorizontal = SizeFlags.ExpandFill,
+            SizeFlagsVertical = SizeFlags.ExpandFill,
         };
-        body.AddThemeConstantOverride("separation", 10);
-        bodyScroll.AddChild(body);
+        overview.AddThemeConstantOverride("separation", 10);
+        _tabs.AddChild(overview);
 
         _metricGrid = new GridContainer
         {
@@ -192,7 +195,7 @@ public partial class PowerMenuControl : Control
         };
         _metricGrid.AddThemeConstantOverride("h_separation", 7);
         _metricGrid.AddThemeConstantOverride("v_separation", 7);
-        body.AddChild(_metricGrid);
+        overview.AddChild(_metricGrid);
         AddMetric("capacity", "KAPAZITÄT");
         AddMetric("production", "PRODUKTION");
         AddMetric("consumption", "VERBRAUCH");
@@ -202,9 +205,24 @@ public partial class PowerMenuControl : Control
         AddMetric("runtime", "RESTLAUFZEIT");
         AddMetric("status", "NETZZUSTAND");
 
-        body.AddChild(CreateHistoryPanel());
-        body.AddChild(CreateSourcesPanel());
-        body.AddChild(CreatePortsPanel());
+        overview.AddChild(CreateHistoryPanel());
+
+        _connectionsLayout = new BoxContainer
+        {
+            Name = "ANSCHLÜSSE",
+            SizeFlagsHorizontal = SizeFlags.ExpandFill,
+            SizeFlagsVertical = SizeFlags.ExpandFill,
+        };
+        _connectionsLayout.AddThemeConstantOverride("separation", 10);
+        _tabs.AddChild(_connectionsLayout);
+        var sourcesPanel = CreateSourcesPanel();
+        sourcesPanel.SizeFlagsHorizontal = SizeFlags.ExpandFill;
+        sourcesPanel.SizeFlagsVertical = SizeFlags.ShrinkBegin;
+        _connectionsLayout.AddChild(sourcesPanel);
+        var portsPanel = CreatePortsPanel();
+        portsPanel.SizeFlagsHorizontal = SizeFlags.ExpandFill;
+        portsPanel.SizeFlagsVertical = SizeFlags.ShrinkBegin;
+        _connectionsLayout.AddChild(portsPanel);
     }
 
     private Control CreateHeader()
@@ -608,6 +626,33 @@ public partial class PowerMenuControl : Control
             Math.Clamp(viewport.X - 40, 360, 720),
             Math.Clamp(viewport.Y - 40, 300, 650));
         _metricGrid.Columns = viewport.X < 670 ? 2 : 4;
+        _connectionsLayout.Vertical = viewport.X < 900;
+    }
+
+    public void RunLayoutSmokeTest()
+    {
+        if (!_ready)
+        {
+            throw new InvalidOperationException("Power menu layout smoke test requires a ready control.");
+        }
+
+        if (FindChild("BodyScroll", recursive: true, owned: false) is not null ||
+            _tabs.GetTabCount() != 2)
+        {
+            throw new InvalidOperationException("Power menu must use two scrollbar-free pages.");
+        }
+
+        foreach (var size in new[] { new Vector2(1366, 768), new Vector2(1920, 1080), new Vector2(2560, 1440) })
+        {
+            var width = Math.Clamp(size.X - 40, 360, 720);
+            var height = Math.Clamp(size.Y - 40, 300, 650);
+            if (width > size.X || height > size.Y || width < 360 || height < 300)
+            {
+                throw new InvalidOperationException($"Invalid power menu bounds at {size.X}x{size.Y}.");
+            }
+        }
+
+        GD.Print("POWER_MENU_LAYOUT_SMOKE_OK: two compact pages, responsive 1366-2560, no scrollbars");
     }
 
     private static MarginContainer CreatePanelMargin()

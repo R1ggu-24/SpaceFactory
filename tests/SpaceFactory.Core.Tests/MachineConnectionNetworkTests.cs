@@ -59,6 +59,41 @@ public sealed class MachineConnectionNetworkTests
     }
 
     [Fact]
+    public void CoarseOfflineTransferStep_MatchesTenOnlineSecondsWithoutStoredBurst()
+    {
+        static (MachineConnectionNetwork Network, MachineState Source, MachineState Target) CreateLine(
+            string suffix)
+        {
+            var network = new MachineConnectionNetwork();
+            var source = PlacedMachine(MachineDefinitionIds.Crusher, $"offline-source-{suffix}");
+            var target = PlacedMachine(MachineDefinitionIds.Smelter, $"offline-target-{suffix}");
+            Assert.True(source.OutputInventory.Add(ProductionItemIds.CrushedIronOre, 160).Succeeded);
+            Register(network, source, target);
+            Assert.True(network.TryConnect(
+                new MachineConnectionId($"offline-belt-{suffix}"),
+                ConnectionTypeIds.ConveyorBelt,
+                Endpoint(source, MachinePortIds.SolidOutput),
+                Endpoint(target, MachinePortIds.SolidInput)).Succeeded);
+            return (network, source, target);
+        }
+
+        var online = CreateLine("online");
+        var offline = CreateLine("coarse");
+        for (var second = 0; second < 10; second++)
+        {
+            online.Network.TickDirectedTransfers(CometId, 1);
+        }
+
+        offline.Network.TickDirectedTransfers(CometId, 10);
+
+        Assert.Equal(80, online.Target.InputInventory.GetAmount(ProductionItemIds.CrushedIronOre));
+        Assert.Equal(
+            online.Target.InputInventory.GetAmount(ProductionItemIds.CrushedIronOre),
+            offline.Target.InputInventory.GetAmount(ProductionItemIds.CrushedIronOre));
+        Assert.Equal(160, offline.Source.OutputInventory.TotalItemCount + offline.Target.InputInventory.TotalItemCount);
+    }
+
+    [Fact]
     public void LiquidPipe_TransfersLiquidButNeverAContainerOrSolid()
     {
         var network = new MachineConnectionNetwork();
@@ -137,6 +172,34 @@ public sealed class MachineConnectionNetworkTests
         Assert.Equal(MachineConnectionFailure.DirectionMismatch, wrongDirection.Failure);
         Assert.Equal(MachineConnectionFailure.ItemCompatibilityMismatch, incompatibleLiquid.Failure);
         Assert.Empty(network.Connections);
+    }
+
+    [Fact]
+    public void ValidateConnection_UsesCommitRulesWithoutMutatingTopology()
+    {
+        var network = new MachineConnectionNetwork();
+        var source = PlacedMachine(MachineDefinitionIds.Crusher, "preview-source");
+        var target = PlacedMachine(MachineDefinitionIds.Smelter, "preview-target");
+        Register(network, source, target);
+        var sourceEndpoint = Endpoint(source, MachinePortIds.SolidOutput);
+        var targetEndpoint = Endpoint(target, MachinePortIds.SolidInput);
+
+        var preview = network.ValidateConnection(
+            ConnectionTypeIds.ConveyorBelt,
+            sourceEndpoint,
+            targetEndpoint);
+
+        Assert.Equal(MachineConnectionFailure.None, preview);
+        Assert.Empty(network.Connections);
+        Assert.True(network.TryConnect(
+            new MachineConnectionId("preview-commit"),
+            ConnectionTypeIds.ConveyorBelt,
+            sourceEndpoint,
+            targetEndpoint).Succeeded);
+        Assert.Equal(
+            MachineConnectionFailure.DuplicateEndpoints,
+            network.ValidateConnection(ConnectionTypeIds.ConveyorBelt, sourceEndpoint, targetEndpoint));
+        Assert.Single(network.Connections);
     }
 
     [Fact]
@@ -235,9 +298,9 @@ public sealed class MachineConnectionNetworkTests
         Assert.Equal(ProductionItemIds.TransportPipe, types.Get(ConnectionTypeIds.GasPipe).RequiredBuildItemId);
         Assert.Equal(TransportMedium.Liquid, types.Get(ConnectionTypeIds.LiquidPipe).Medium);
         Assert.Equal(TransportMedium.Gas, types.Get(ConnectionTypeIds.GasPipe).Medium);
-        Assert.Equal(5, LogisticsConfiguration.StartingPowerCableCount);
-        Assert.Equal(5, LogisticsConfiguration.StartingConveyorBeltCount);
-        Assert.Equal(5, LogisticsConfiguration.StartingTransportPipeCount);
+        Assert.Equal(3, LogisticsConfiguration.StartingPowerCableCount);
+        Assert.Equal(3, LogisticsConfiguration.StartingConveyorBeltCount);
+        Assert.Equal(3, LogisticsConfiguration.StartingTransportPipeCount);
     }
 
     [Fact]

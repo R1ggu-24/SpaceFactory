@@ -14,7 +14,11 @@ public sealed class RecipeDefinition
         double durationSeconds,
         double requiredPowerKilowatts,
         IEnumerable<ItemAmount>? returnedContainers = null,
-        ResearchId? unlockRequirement = null)
+        ResearchId? unlockRequirement = null,
+        TechnologyTier technologyTier = TechnologyTier.Tier1,
+        string? alternativeGroup = null,
+        IEnumerable<string>? tags = null,
+        SpaceFactory.Core.Items.ItemId? sourceResourceId = null)
     {
         Id = id;
         DisplayName = displayName;
@@ -26,6 +30,15 @@ public sealed class RecipeDefinition
         DurationSeconds = durationSeconds;
         RequiredPowerKilowatts = requiredPowerKilowatts;
         UnlockRequirement = unlockRequirement;
+        TechnologyTier = technologyTier;
+        AlternativeGroup = string.IsNullOrWhiteSpace(alternativeGroup) ? null : alternativeGroup.Trim();
+        Tags = (tags ?? [])
+            .Select(tag => tag?.Trim() ?? string.Empty)
+            .Where(tag => tag.Length > 0)
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(tag => tag, StringComparer.Ordinal)
+            .ToArray();
+        SourceResourceId = sourceResourceId;
         CombinedOutputs = ProductionInventoryRules.Group(Outputs.Concat(ReturnedContainers));
         Validate();
     }
@@ -52,10 +65,24 @@ public sealed class RecipeDefinition
 
     public ResearchId? UnlockRequirement { get; }
 
+    public TechnologyTier TechnologyTier { get; }
+
+    public string? AlternativeGroup { get; }
+
+    public IReadOnlyList<string> Tags { get; }
+
+    public SpaceFactory.Core.Items.ItemId? SourceResourceId { get; }
+
+    public bool IsExtractionRecipe => SourceResourceId is not null;
+
     private void Validate()
     {
         if (string.IsNullOrWhiteSpace(DisplayName) || string.IsNullOrWhiteSpace(Category) ||
-            Inputs.Count == 0 || Outputs.Count == 0 || DurationSeconds <= 0 || RequiredPowerKilowatts <= 0)
+            Outputs.Count == 0 || DurationSeconds <= 0 || RequiredPowerKilowatts < 0 ||
+            !Enum.IsDefined(TechnologyTier) ||
+            (SourceResourceId is null && Inputs.Count == 0) ||
+            (SourceResourceId is not null && Inputs.Count != 0) ||
+            (RequiredPowerKilowatts == 0 && SourceResourceId is null))
         {
             throw new ArgumentException($"Recipe definition '{Id}' is invalid.");
         }

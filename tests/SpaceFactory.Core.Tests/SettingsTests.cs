@@ -26,6 +26,36 @@ public sealed class SettingsTests
         Assert.Equal(
             InputBinding.MouseButton(InputBindingCodes.LeftMouseButton),
             settings.GetBinding(GameAction.UseMiningTool));
+        Assert.Equal(
+            InputBinding.MouseButton(InputBindingCodes.MiddleMouseButton),
+            settings.GetBinding(GameAction.ActivateHandSlot));
+        Assert.Equal(InputBinding.Key(InputBindingCodes.Up), settings.GetBinding(GameAction.PreviousTool));
+        Assert.Equal(InputBinding.Key(InputBindingCodes.Down), settings.GetBinding(GameAction.NextTool));
+        Assert.Equal(
+            [InputBindingCodes.One, InputBindingCodes.Two, InputBindingCodes.Three,
+                InputBindingCodes.Four, InputBindingCodes.Five, InputBindingCodes.Six],
+            InputActionCatalog.HotbarActions
+                .Select(action => settings.GetBinding(action).Code)
+                .ToArray());
+    }
+
+    [Fact]
+    public void HotbarActions_AreConfigurableAndMappedToCentralInputActions()
+    {
+        Assert.Equal(6, InputActionCatalog.HotbarActions.Count);
+        Assert.Equal(
+            ["hotbar_slot_1", "hotbar_slot_2", "hotbar_slot_3",
+                "hotbar_slot_4", "hotbar_slot_5", "hotbar_slot_6"],
+            InputActionCatalog.HotbarActions
+                .Select(action => InputActionCatalog.Get(action).InputMapAction)
+                .ToArray());
+
+        var rebound = InputSettings.CreateDefault().WithBinding(
+            GameAction.HotbarSlot6,
+            InputBinding.Key(InputBindingCodes.F));
+
+        Assert.Equal(InputBinding.Key(InputBindingCodes.F), rebound.GetBinding(GameAction.HotbarSlot6));
+        Assert.Empty(rebound.FindConflicts());
     }
 
     [Fact]
@@ -43,16 +73,12 @@ public sealed class SettingsTests
     }
 
     [Fact]
-    public void FindConflicts_IncludesPermanentArrowFallbacks()
+    public void ToolCycleActions_HaveNoHiddenPermanentArrowAlternatives()
     {
-        var settings = InputSettings.CreateDefault().WithBinding(
-            GameAction.Interact,
-            InputBinding.Key(InputBindingCodes.Up));
-
-        var conflict = Assert.Single(settings.FindConflicts());
-
-        Assert.Equal(InputBinding.Key(InputBindingCodes.Up), conflict.Binding);
-        Assert.Equal([GameAction.MoveUp, GameAction.Interact], conflict.Actions);
+        Assert.Empty(InputActionCatalog.GetPermanentBindings(GameAction.PreviousTool));
+        Assert.Empty(InputActionCatalog.GetPermanentBindings(GameAction.NextTool));
+        Assert.Null(InputActionCatalog.FindPermanentBindingOwner(InputBinding.Key(InputBindingCodes.Left)));
+        Assert.Null(InputActionCatalog.FindPermanentBindingOwner(InputBinding.Key(InputBindingCodes.Right)));
     }
 
     [Fact]
@@ -222,6 +248,22 @@ public sealed class SettingsTests
         Assert.Equal(GameSettings.CurrentVersion, normalized.SchemaVersion);
         Assert.Equal(100, normalized.Audio.MasterVolume);
         Assert.Equal(30, normalized.Video.RefreshRate);
+        Assert.True(normalized.HotbarMouseWheelEnabled);
+    }
+
+    [Fact]
+    public void NormalizeGameSettings_MigratesMouseWheelOptionAndPreservesExplicitChoice()
+    {
+        var legacy = new GameSettings(
+            1,
+            InputSettings.CreateDefault(),
+            AudioSettings.Default,
+            VideoSettings.Default,
+            HotbarMouseWheelEnabled: false);
+        var current = GameSettings.CreateDefault() with { HotbarMouseWheelEnabled = false };
+
+        Assert.True(legacy.Normalize().HotbarMouseWheelEnabled);
+        Assert.False(current.Normalize().HotbarMouseWheelEnabled);
     }
 
     [Fact]
@@ -233,7 +275,8 @@ public sealed class SettingsTests
                 GameAction.Interact,
                 InputBinding.MouseButton(2)),
             Audio = AudioSettings.Default with { MusicVolume = 37 },
-            Video = VideoSettings.Default with { WindowMode = WindowMode.BorderlessFullscreen }
+            Video = VideoSettings.Default with { WindowMode = WindowMode.BorderlessFullscreen },
+            HotbarMouseWheelEnabled = false,
         };
 
         var json = JsonSerializer.Serialize(original);
@@ -243,5 +286,6 @@ public sealed class SettingsTests
         Assert.Equal(InputBinding.MouseButton(2), restored.Input.GetBinding(GameAction.Interact));
         Assert.Equal(37, restored.Audio.MusicVolume);
         Assert.Equal(WindowMode.BorderlessFullscreen, restored.Video.WindowMode);
+        Assert.False(restored.HotbarMouseWheelEnabled);
     }
 }

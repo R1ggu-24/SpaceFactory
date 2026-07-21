@@ -79,13 +79,24 @@ public sealed class ConnectionTypeCatalog
 
     public bool TryGet(ConnectionKind kind, out ConnectionTypeDefinition? definition) =>
         _definitionsByKind.TryGetValue(kind, out definition);
+
+    /// <summary>
+    /// Resolves a physical hotbar item to every connection mode it can start. Transport pipes
+    /// intentionally return both liquid and gas modes; the selected endpoint decides the medium.
+    /// </summary>
+    public IReadOnlyList<ConnectionTypeDefinition> ForBuildItem(ItemId itemId) => _definitions.Values
+        .Where(definition => definition.RequiredBuildItemId == itemId)
+        .OrderBy(definition => definition.Kind)
+        .ToArray();
 }
 
 public static class LogisticsConfiguration
 {
-    public const int StartingPowerCableCount = 5;
-    public const int StartingConveyorBeltCount = 5;
-    public const int StartingTransportPipeCount = 5;
+    // New games receive only a small construction sample. The stack limit remains item-defined
+    // (normally 200); these values are starter quantities, not capacity limits.
+    public const int StartingPowerCableCount = 3;
+    public const int StartingConveyorBeltCount = 3;
+    public const int StartingTransportPipeCount = 3;
     public const int MaximumMaterialConnectionsPerPort = 1;
     public const int MaximumPowerConnectionsPerPort = PowerGridConfiguration.MaximumCablesPerPort;
     public const double ConveyorTransferUnitsPerSecond = 8;

@@ -6,7 +6,9 @@ public sealed class ShipFuelTank
 {
     private const double ComparisonTolerance = 0.000_000_001;
 
-    public ShipFuelTank(double initialFuel = ShipFuelConfiguration.TankCapacity)
+    public ShipFuelTank(
+        double initialFuel = ShipFuelConfiguration.TankCapacity,
+        ShipFuelType initialFuelType = ShipFuelConfiguration.NewGameFuelType)
     {
         if (!double.IsFinite(initialFuel) || initialFuel < 0 ||
             initialFuel > ShipFuelConfiguration.TankCapacity)
@@ -14,10 +16,18 @@ public sealed class ShipFuelTank
             throw new ArgumentOutOfRangeException(nameof(initialFuel));
         }
 
+        if (!Enum.IsDefined(initialFuelType))
+        {
+            throw new ArgumentOutOfRangeException(nameof(initialFuelType));
+        }
+
         CurrentFuel = initialFuel;
+        CurrentFuelType = initialFuelType;
     }
 
     public double CurrentFuel { get; private set; }
+
+    public ShipFuelType CurrentFuelType { get; private set; }
 
     public double Capacity => ShipFuelConfiguration.TankCapacity;
 
@@ -26,6 +36,12 @@ public sealed class ShipFuelTank
     public double FillRatio => CurrentFuel / Capacity;
 
     public double RemainingBoostSeconds => CurrentFuel / ShipFuelConfiguration.ConsumptionPerBoostSecond;
+
+    public double BoostFlightSpeed =>
+        SpaceFactory.Core.Ships.ShipFlightConfiguration.GetBoostFlightSpeed(CurrentFuelType);
+
+    public double BoostSpeedMultiplier =>
+        SpaceFactory.Core.Ships.ShipFlightConfiguration.GetBoostSpeedMultiplier(CurrentFuelType);
 
     public bool CanActivateBoost =>
         CurrentFuel + ComparisonTolerance >= ShipFuelConfiguration.MinimumFuelToActivateBoost;
@@ -90,29 +106,66 @@ public sealed class ShipFuelTank
             consumedFuel);
     }
 
-    public bool TryAddFuel(double amount)
+    public bool TryAddFuel(double amount) => TryAddFuel(amount, CurrentFuelType);
+
+    public bool TryAddFuel(double amount, ShipFuelType fuelType)
     {
-        if (!double.IsFinite(amount) || amount <= 0)
+        if (!double.IsFinite(amount) || amount <= 0 || !Enum.IsDefined(fuelType))
         {
             return false;
         }
 
-        if (amount > RemainingCapacity + ComparisonTolerance)
+        if (amount > RemainingCapacity + ComparisonTolerance ||
+            (CurrentFuel > ComparisonTolerance && CurrentFuelType != fuelType))
         {
             return false;
         }
 
+        CurrentFuelType = fuelType;
         CurrentFuel = Math.Min(Capacity, CurrentFuel + amount);
         return true;
     }
 
+    public bool TryRemoveFuel(double amount)
+    {
+        if (!double.IsFinite(amount) || amount <= 0 || amount > CurrentFuel + ComparisonTolerance)
+        {
+            return false;
+        }
+
+        CurrentFuel = Math.Max(0, CurrentFuel - amount);
+        return true;
+    }
+
+    public bool TrySelectFuelType(ShipFuelType fuelType)
+    {
+        if (!Enum.IsDefined(fuelType) || CurrentFuel > ComparisonTolerance)
+        {
+            return false;
+        }
+
+        CurrentFuelType = fuelType;
+        return true;
+    }
+
     public void RestoreFuel(double amount)
+    {
+        RestoreFuel(amount, CurrentFuelType);
+    }
+
+    public void RestoreFuel(double amount, ShipFuelType fuelType)
     {
         if (!double.IsFinite(amount) || amount < 0 || amount > Capacity)
         {
             throw new ArgumentOutOfRangeException(nameof(amount));
         }
 
+        if (!Enum.IsDefined(fuelType))
+        {
+            throw new ArgumentOutOfRangeException(nameof(fuelType));
+        }
+
         CurrentFuel = amount;
+        CurrentFuelType = fuelType;
     }
 }

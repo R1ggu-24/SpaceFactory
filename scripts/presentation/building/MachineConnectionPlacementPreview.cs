@@ -14,6 +14,7 @@ public partial class MachineConnectionPlacementPreview : Node2D
     private MachineView? _source;
     private Label? _hint;
     private Vector2 _mouseWorldPosition;
+    private bool _candidateAllowed;
 
     public bool IsActive { get; private set; }
 
@@ -50,6 +51,7 @@ public partial class MachineConnectionPlacementPreview : Node2D
         _type = type;
         _presentation = ConnectionPresentationCatalog.Get(type.Id);
         _source = null;
+        _candidateAllowed = false;
         _mouseWorldPosition = IsInsideTree() ? GetGlobalMousePosition() : Vector2.Zero;
         IsActive = true;
         Visible = true;
@@ -67,7 +69,33 @@ public partial class MachineConnectionPlacementPreview : Node2D
         }
 
         _source = source;
+        _candidateAllowed = false;
         SetHint("QUELLE GEWÄHLT · ZIELMASCHINE ANKLICKEN", valid: true);
+        QueueRedraw();
+    }
+
+    /// <summary>Applies the authoritative, non-mutating runtime connection validation.</summary>
+    public void SetCandidateState(bool allowed, string failureMessage)
+    {
+        if (!IsActive)
+        {
+            return;
+        }
+
+        _candidateAllowed = allowed;
+        if (allowed)
+        {
+            SetHint(
+                Source is null ? "AUSGANG FREI · KLICKEN" : "ANSCHLUSS FREI · KLICKEN",
+                valid: true);
+        }
+        else
+        {
+            SetHint(
+                string.IsNullOrWhiteSpace(failureMessage) ? "KEIN FREIER ANSCHLUSS" : failureMessage.ToUpperInvariant(),
+                valid: false);
+        }
+
         QueueRedraw();
     }
 
@@ -86,6 +114,7 @@ public partial class MachineConnectionPlacementPreview : Node2D
         _type = null;
         _presentation = null;
         _source = null;
+        _candidateAllowed = false;
         QueueRedraw();
     }
 
@@ -99,17 +128,21 @@ public partial class MachineConnectionPlacementPreview : Node2D
         var mouse = ToLocal(_mouseWorldPosition);
         if (Source is not { } source || _type is null)
         {
+            var cursorColor = _candidateAllowed
+                ? _presentation.FlowColor
+                : new Color(1.0f, 0.31f, 0.33f);
             DrawCircle(mouse, 13, new Color(0.02f, 0.06f, 0.075f, 0.68f));
-            DrawArc(mouse, 13, 0, Mathf.Tau, 24, _presentation.FlowColor, 2, true);
-            DrawLine(mouse + new Vector2(-7, 0), mouse + new Vector2(7, 0), _presentation.FlowColor, 1.4f, true);
-            DrawLine(mouse + new Vector2(0, -7), mouse + new Vector2(0, 7), _presentation.FlowColor, 1.4f, true);
+            DrawArc(mouse, 13, 0, Mathf.Tau, 24, cursorColor, 2, true);
+            DrawLine(mouse + new Vector2(-7, 0), mouse + new Vector2(7, 0), cursorColor, 1.4f, true);
+            DrawLine(mouse + new Vector2(0, -7), mouse + new Vector2(0, 7), cursorColor, 1.4f, true);
             return;
         }
 
         var sourceAnchor = ToLocal(source.GetWorldConnectionAnchor(
             ConnectionPresentationCatalog.GetSourceAnchor(_type.Kind)));
         var withinRange = sourceAnchor.DistanceTo(mouse) <= ConnectionPresentationCatalog.MaximumConnectionLength;
-        var color = withinRange ? _presentation.FlowColor : new Color(1.0f, 0.31f, 0.33f);
+        var valid = withinRange && _candidateAllowed;
+        var color = valid ? _presentation.FlowColor : new Color(1.0f, 0.31f, 0.33f);
         DrawPolyline([sourceAnchor, mouse], new Color(0, 0, 0, 0.58f), _presentation.LineWidth + 3, true);
         DrawPolyline([sourceAnchor, mouse], new Color(color, 0.72f), _presentation.LineWidth, true);
         DrawCircle(sourceAnchor, 7, new Color(color, 0.88f));

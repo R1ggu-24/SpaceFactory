@@ -20,11 +20,12 @@ public static class ProductionInventoryRules
 
         foreach (var item in grouped)
         {
+            var stackSize = inventory.GetMaximumStackSize(item.ItemId);
             var existingCapacity = inventory.Slots
                 .Where(slot => slot.ItemId == item.ItemId)
-                .Sum(slot => slot.MaximumAmount - slot.Amount);
+                .Sum(slot => stackSize - slot.Amount);
             var amountRequiringEmptySlots = Math.Max(0, item.Amount - existingCapacity);
-            additionalSlotsNeeded += DivideRoundUp(amountRequiringEmptySlots, inventory.MaximumStackSize);
+            additionalSlotsNeeded += DivideRoundUp(amountRequiringEmptySlots, stackSize);
         }
 
         return additionalSlotsNeeded <= emptySlotCount;
@@ -33,10 +34,11 @@ public static class ProductionInventoryRules
     public static int GetAvailableCapacity(SlotInventory inventory, ItemId itemId)
     {
         ArgumentNullException.ThrowIfNull(inventory);
+        var stackSize = inventory.GetMaximumStackSize(itemId);
         var existingCapacity = inventory.Slots
             .Where(slot => slot.ItemId == itemId)
-            .Sum(slot => slot.MaximumAmount - slot.Amount);
-        return existingCapacity + inventory.Slots.Count(slot => slot.IsEmpty) * inventory.MaximumStackSize;
+            .Sum(slot => stackSize - slot.Amount);
+        return existingCapacity + inventory.Slots.Count(slot => slot.IsEmpty) * stackSize;
     }
 
     public static bool TryRemoveAll(SlotInventory inventory, IEnumerable<ItemAmount> items)

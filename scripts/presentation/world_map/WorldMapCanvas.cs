@@ -13,6 +13,7 @@ public partial class WorldMapCanvas : Control
     private const float DragThreshold = 4;
 
     private readonly List<VisibleComet> _visibleComets = [];
+    private readonly List<VisibleMarker> _visibleMarkers = [];
     private IReadOnlyDictionary<string, ResourceDefinition> _resourceCatalog =
         new Dictionary<string, ResourceDefinition>();
     private MapViewState _snapshot = MapViewState.Empty;
@@ -25,12 +26,14 @@ public partial class WorldMapCanvas : Control
     private MouseButton _dragButton;
     private Vector2 _pressPosition;
     private string? _pressedObjectId;
+    private PressedObjectKind _pressedObjectKind;
     private string? _hoveredObjectId;
     private Vector2 _hoverPosition;
     private bool _landableOnly;
     private bool _isFollowingShip;
 
     public event Action<string?>? TargetSelectionRequested;
+    public event Action<string?>? MarkerTargetSelectionRequested;
     public event Action<WorldPosition>? MarkerPlacementRequested;
     public event Action<bool>? ShipFollowingChanged;
 
@@ -166,6 +169,7 @@ public partial class WorldMapCanvas : Control
         _pointerDown = false;
         _didDrag = false;
         _pressedObjectId = null;
+        _pressedObjectKind = PressedObjectKind.None;
         _hoveredObjectId = null;
         MouseDefaultCursorShape = CursorShape.Cross;
         QueueRedraw();
@@ -222,6 +226,7 @@ public partial class WorldMapCanvas : Control
         DrawScannedSectors();
         DrawFlightRoute();
         _visibleComets.Clear();
+        _visibleMarkers.Clear();
         DrawDiscoveredObjects();
         DrawCustomMarkers();
         DrawShip();
@@ -237,9 +242,25 @@ public partial class WorldMapCanvas : Control
             _didDrag = false;
             _dragButton = button.ButtonIndex;
             _pressPosition = button.Position;
-            _pressedObjectId = button.ButtonIndex == MouseButton.Left
-                ? FindCometAt(button.Position)?.Item.Id
-                : null;
+            _pressedObjectId = null;
+            _pressedObjectKind = PressedObjectKind.None;
+            if (button.ButtonIndex == MouseButton.Left)
+            {
+                var marker = FindMarkerAt(button.Position);
+                if (marker is not null)
+                {
+                    _pressedObjectId = marker.Item.Id;
+                    _pressedObjectKind = PressedObjectKind.Marker;
+                }
+                else
+                {
+                    _pressedObjectId = FindCometAt(button.Position)?.Item.Id;
+                    _pressedObjectKind = _pressedObjectId is null
+                        ? PressedObjectKind.None
+                        : PressedObjectKind.Comet;
+                }
+            }
+
             return;
         }
 
@@ -250,24 +271,36 @@ public partial class WorldMapCanvas : Control
 
         if (!_didDrag && button.ButtonIndex == MouseButton.Left)
         {
-            var releasedOver = FindCometAt(button.Position)?.Item.Id;
+            var releasedOver = _pressedObjectKind == PressedObjectKind.Marker
+                ? FindMarkerAt(button.Position)?.Item.Id
+                : FindCometAt(button.Position)?.Item.Id;
             if (_pressedObjectId is not null && releasedOver == _pressedObjectId)
             {
-                var newTarget = _snapshot.ActiveTargetCometId == _pressedObjectId
-                    ? null
-                    : _pressedObjectId;
+                var isMarker = _pressedObjectKind == PressedObjectKind.Marker;
+                var activeTargetId = isMarker
+                    ? _snapshot.ActiveTargetMarkerId
+                    : _snapshot.ActiveTargetCometId;
+                var newTarget = activeTargetId == _pressedObjectId ? null : _pressedObjectId;
                 if (newTarget is not null)
                 {
                     SetShipFollowing(false);
                 }
 
-                TargetSelectionRequested?.Invoke(newTarget);
+                if (isMarker)
+                {
+                    MarkerTargetSelectionRequested?.Invoke(newTarget);
+                }
+                else
+                {
+                    TargetSelectionRequested?.Invoke(newTarget);
+                }
             }
         }
 
         _pointerDown = false;
         _didDrag = false;
         _pressedObjectId = null;
+        _pressedObjectKind = PressedObjectKind.None;
         MouseDefaultCursorShape = CursorShape.Cross;
     }
 
@@ -420,6 +453,11 @@ public partial class WorldMapCanvas : Control
     {
         foreach (var marker in _snapshot.Markers)
         {
+            if (!marker.Exists)
+            {
+                continue;
+            }
+
             var point = WorldToScreen(marker.WorldPosition);
             if (!new Rect2(Vector2.Zero, Size).HasPoint(point))
             {
@@ -429,6 +467,12 @@ public partial class WorldMapCanvas : Control
             var color = MapVisualPalette.ParseColor(marker.ColorHex, MapVisualPalette.Cyan);
             DrawLine(point + new Vector2(0, 5), point + new Vector2(0, -8), color, 2, true);
             DrawCircle(point + new Vector2(0, -10), 4, color);
+            if (_snapshot.ActiveTargetMarkerId == marker.Id)
+            {
+                DrawTargetBrackets(point, 13);
+            }
+
+            _visibleMarkers.Add(new VisibleMarker(marker, point, 13));
         }
     }
 
@@ -635,6 +679,20 @@ public partial class WorldMapCanvas : Control
         return null;
     }
 
+    private VisibleMarker? FindMarkerAt(Vector2 screenPosition)
+    {
+        for (var index = _visibleMarkers.Count - 1; index >= 0; index--)
+        {
+            var marker = _visibleMarkers[index];
+            if (marker.ScreenPosition.DistanceSquaredTo(screenPosition) <= marker.HitRadius * marker.HitRadius)
+            {
+                return marker;
+            }
+        }
+
+        return null;
+    }
+
     private bool IsDiscovered(WorldPosition position) => _snapshot.Chunks.Any(sector =>
         sector.Status != ChunkDiscoveryStatus.Unknown &&
         position.X >= sector.WorldOrigin.X &&
@@ -674,4 +732,13 @@ public partial class WorldMapCanvas : Control
     private static Vector2 ToVector(WorldPosition position) => new((float)position.X, (float)position.Y);
 
     private sealed record VisibleComet(DiscoveredCometData Item, Vector2 ScreenPosition, float HitRadius);
+
+    private sealed record VisibleMarker(MapMarkerData Item, Vector2 ScreenPosition, float HitRadius);
+
+    private enum PressedObjectKind
+    {
+        None,
+        Comet,
+        Marker,
+    }
 }

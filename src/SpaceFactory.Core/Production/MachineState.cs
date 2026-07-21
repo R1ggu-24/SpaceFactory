@@ -1,5 +1,6 @@
 using SpaceFactory.Core.Inventory;
 using SpaceFactory.Core.Items;
+using SpaceFactory.Core.World.Resources;
 
 namespace SpaceFactory.Core.Production;
 
@@ -13,6 +14,8 @@ public enum MachineOperationStatus
     WaitingForMaterial,
     WaitingForEnergy,
     OutputFull,
+    MissingResourceSource,
+    WaitingForLogistics,
 }
 
 public sealed record MachinePlacement(
@@ -38,6 +41,22 @@ public readonly record struct MachineTickResult(
 
 public sealed record MachineInventorySlotSnapshot(int Index, ItemId ItemId, int Amount);
 
+public sealed record ExtractionSourceBinding(
+    string SourceId,
+    ItemId ResourceId,
+    ResourcePurity Purity,
+    double BaseExtractionUnitsPerMinute)
+{
+    public void Validate()
+    {
+        if (string.IsNullOrWhiteSpace(SourceId) || !Enum.IsDefined(Purity) ||
+            !double.IsFinite(BaseExtractionUnitsPerMinute) || BaseExtractionUnitsPerMinute <= 0)
+        {
+            throw new ArgumentException("The extraction source binding is invalid.");
+        }
+    }
+}
+
 public sealed record MachineStateSnapshot(
     MachineInstanceId InstanceId,
     MachineDefinitionId DefinitionId,
@@ -50,7 +69,11 @@ public sealed record MachineStateSnapshot(
     bool IsBatchInProgress,
     double GeneratorFuelSecondsRemaining,
     IReadOnlyList<MachineInventorySlotSnapshot> InputSlots,
-    IReadOnlyList<MachineInventorySlotSnapshot> OutputSlots);
+    IReadOnlyList<MachineInventorySlotSnapshot> OutputSlots,
+    ExtractionSourceBinding? ExtractionSource = null,
+    double InternalEnergyKilowattSeconds = 0,
+    double StoredGridEnergyKilowattSeconds = 0,
+    bool ConstructionCostsPaid = true);
 
 public sealed class MachineState
 {
@@ -61,17 +84,27 @@ public sealed class MachineState
         MachineInstanceId instanceId,
         MachineDefinition definition,
         MachinePlacement? placement = null,
-        bool constructionCompleted = false)
+        bool constructionCompleted = false,
+        bool constructionCostsPaid = true)
     {
         ArgumentNullException.ThrowIfNull(definition);
         placement?.Validate();
         InstanceId = instanceId;
         Definition = definition;
         Placement = placement;
-        InputInventory = new SlotInventory(definition.InputSlotCount);
-        OutputInventory = new SlotInventory(definition.OutputSlotCount);
+        InputInventory = new SlotInventory(
+            definition.InputSlotCount,
+            itemStackSizeResolver: ResolveItemStackSize);
+        OutputInventory = new SlotInventory(
+            definition.OutputSlotCount,
+            itemStackSizeResolver: ResolveItemStackSize);
         ConstructionProgressSeconds = constructionCompleted ? definition.ConstructionDurationSeconds : 0;
+        ConstructionCostsPaid = constructionCostsPaid;
         Status = constructionCompleted ? MachineOperationStatus.Disabled : MachineOperationStatus.UnderConstruction;
+        InternalEnergyKilowattSeconds = definition.Id == MachineDefinitionIds.MobileMiner
+            ? MachineEnergyConfiguration.MobileMinerInitialEnergyKilowattSeconds
+            : 0;
+        HasRequiredOutputConnection = definition.Id != MachineDefinitionIds.AutomaticMiner;
     }
 
     public MachineInstanceId InstanceId { get; }
@@ -96,6 +129,25 @@ public sealed class MachineState
 
     public double GeneratorFuelSecondsRemaining { get; private set; }
 
+    public double GeneratorFuelTankCapacitySeconds => Definition.Id == MachineDefinitionIds.FuelGenerator
+        ? Definition.GeneratorFuelSecondsPerItem * ProductionConfiguration.FuelGeneratorTankContainerCapacity
+        : 0;
+
+    public ExtractionSourceBinding? ExtractionSource { get; private set; }
+
+    public double InternalEnergyKilowattSeconds { get; private set; }
+
+    public double StoredGridEnergyKilowattSeconds { get; private set; }
+
+    /// <summary>
+    /// Tracks whether this exact instance consumed its catalog construction costs. The first
+    /// basic generator is intentionally free and therefore must not mint materials when removed.
+    /// Physical placement kits still count as paid construction costs.
+    /// </summary>
+    public bool ConstructionCostsPaid { get; private set; }
+
+    public bool HasRequiredOutputConnection { get; private set; }
+
     public bool IsBatchInProgress => _batchInProgress;
 
     public bool IsConstructionComplete =>
@@ -118,7 +170,11 @@ public sealed class MachineState
         _batchInProgress,
         GeneratorFuelSecondsRemaining,
         SnapshotInventory(InputInventory),
-        SnapshotInventory(OutputInventory));
+        SnapshotInventory(OutputInventory),
+        ExtractionSource,
+        InternalEnergyKilowattSeconds,
+        StoredGridEnergyKilowattSeconds,
+        ConstructionCostsPaid);
 
     public static MachineState Restore(MachineStateSnapshot snapshot, MachineDefinition definition)
     {
@@ -129,6 +185,9 @@ public sealed class MachineState
             snapshot.ConstructionProgressSeconds > definition.ConstructionDurationSeconds ||
             !double.IsFinite(snapshot.ProductionProgressSeconds) || snapshot.ProductionProgressSeconds < 0 ||
             !double.IsFinite(snapshot.GeneratorFuelSecondsRemaining) || snapshot.GeneratorFuelSecondsRemaining < 0 ||
+            !double.IsFinite(snapshot.InternalEnergyKilowattSeconds) || snapshot.InternalEnergyKilowattSeconds < 0 ||
+            !double.IsFinite(snapshot.StoredGridEnergyKilowattSeconds) || snapshot.StoredGridEnergyKilowattSeconds < 0 ||
+            snapshot.StoredGridEnergyKilowattSeconds > MachineEnergyConfiguration.BatteryBankCapacityKilowattSeconds ||
             (snapshot.IsBatchInProgress && snapshot.SelectedRecipeId is null))
         {
             throw new ArgumentException("The persisted machine state is invalid.", nameof(snapshot));
@@ -143,7 +202,12 @@ public sealed class MachineState
             ProductionProgressSeconds = snapshot.ProductionProgressSeconds,
             _batchInProgress = snapshot.IsBatchInProgress,
             GeneratorFuelSecondsRemaining = snapshot.GeneratorFuelSecondsRemaining,
+            ExtractionSource = snapshot.ExtractionSource,
+            InternalEnergyKilowattSeconds = snapshot.InternalEnergyKilowattSeconds,
+            StoredGridEnergyKilowattSeconds = snapshot.StoredGridEnergyKilowattSeconds,
+            ConstructionCostsPaid = snapshot.ConstructionCostsPaid,
         };
+        snapshot.ExtractionSource?.Validate();
         RestoreInventory(state.InputInventory, snapshot.InputSlots);
         RestoreInventory(state.OutputInventory, snapshot.OutputSlots);
         return state;
@@ -162,9 +226,83 @@ public sealed class MachineState
         return true;
     }
 
+    public void BindExtractionSource(ExtractionSourceBinding source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        source.Validate();
+        if (Definition.Archetype != MachineArchetype.Extractor)
+        {
+            throw new InvalidOperationException("Only an extractor can bind a resource source.");
+        }
+
+        ExtractionSource = source;
+        RefreshIdleStatus();
+    }
+
+    public void ClearExtractionSource()
+    {
+        if (_batchInProgress)
+        {
+            throw new InvalidOperationException("An active extraction batch cannot lose its source.");
+        }
+
+        ExtractionSource = null;
+        RefreshIdleStatus();
+    }
+
+    public void SetOutputConnectionAvailable(bool available)
+    {
+        HasRequiredOutputConnection = Definition.Id != MachineDefinitionIds.AutomaticMiner || available;
+        if (!HasRequiredOutputConnection && IsEnabled)
+        {
+            Status = MachineOperationStatus.WaitingForLogistics;
+        }
+        else
+        {
+            RefreshIdleStatus();
+        }
+    }
+
+    public double StoreGridEnergy(double requestedEnergyKilowattSeconds)
+    {
+        ValidateEnergyAmount(requestedEnergyKilowattSeconds);
+        EnsureBatteryBank();
+        var stored = Math.Min(
+            requestedEnergyKilowattSeconds * Definition.EfficiencyMultiplier,
+            MachineEnergyConfiguration.BatteryBankCapacityKilowattSeconds - StoredGridEnergyKilowattSeconds);
+        StoredGridEnergyKilowattSeconds += stored;
+        return stored;
+    }
+
+    public double ProvideStoredGridEnergy(double requestedEnergyKilowattSeconds)
+    {
+        ValidateEnergyAmount(requestedEnergyKilowattSeconds);
+        EnsureBatteryBank();
+        var provided = Math.Min(requestedEnergyKilowattSeconds, StoredGridEnergyKilowattSeconds);
+        StoredGridEnergyKilowattSeconds -= provided;
+        return provided;
+    }
+
     public void SetEnabled(bool enabled)
     {
         IsEnabled = enabled;
+        RefreshIdleStatus();
+    }
+
+    /// <summary>
+    /// Commits a prevalidated manual tank transfer. Container exchange and this value are
+    /// coordinated by <see cref="GeneratorFuelTankTransfer"/> so gameplay code cannot mutate
+    /// the generator reservoir independently of its physical inventories.
+    /// </summary>
+    internal void SetGeneratorFuelSecondsForTransfer(double fuelSeconds)
+    {
+        if (Definition.Id != MachineDefinitionIds.FuelGenerator ||
+            !double.IsFinite(fuelSeconds) || fuelSeconds < -Epsilon)
+        {
+            throw new InvalidOperationException("The generator fuel-tank value is invalid.");
+        }
+
+        GeneratorFuelSecondsRemaining = Math.Max(0, fuelSeconds);
         RefreshIdleStatus();
     }
 
@@ -192,6 +330,15 @@ public sealed class MachineState
             return 0;
         }
 
+        if (!HasMatchingExtractionSource(recipe) ||
+            IsMobileMinerWithoutAvailableEnergy(recipe) ||
+            !HasRequiredOutputConnection)
+        {
+            return 0;
+        }
+
+        var requiredPower = GetEffectiveRequiredPowerKilowatts(recipe);
+
         if (_batchInProgress)
         {
             if (ProductionProgressSeconds + Epsilon >= recipe.DurationSeconds)
@@ -199,16 +346,16 @@ public sealed class MachineState
                 return 0;
             }
 
-            return recipe.RequiredPowerKilowatts;
+            return requiredPower;
         }
 
         if (!ProductionInventoryRules.ContainsAll(InputInventory, recipe.Inputs) ||
-            !ProductionInventoryRules.CanStoreAll(OutputInventory, recipe.CombinedOutputs))
+            !MachineOutputInventoryRules.CanStoreAll(OutputInventory, recipe.CombinedOutputs))
         {
             return 0;
         }
 
-        return recipe.RequiredPowerKilowatts;
+        return requiredPower;
     }
 
     public MachineTickResult TickProduction(
@@ -235,6 +382,23 @@ public sealed class MachineState
             return new MachineTickResult(0, 0, Status);
         }
 
+
+        if (!HasMatchingExtractionSource(recipe))
+        {
+            Status = MachineOperationStatus.MissingResourceSource;
+            return new MachineTickResult(0, 0, Status);
+        }
+
+
+        if (!HasRequiredOutputConnection)
+        {
+            Status = MachineOperationStatus.WaitingForLogistics;
+            return new MachineTickResult(0, 0, Status);
+        }
+
+        var requiredPower = GetEffectiveRequiredPowerKilowatts(recipe);
+        var workRate = GetProductionWorkRate(recipe);
+
         var remainingSeconds = deltaSeconds;
         var completedCycles = 0;
         var consumedEnergy = 0.0;
@@ -260,7 +424,7 @@ public sealed class MachineState
                     break;
                 }
 
-                if (!ProductionInventoryRules.CanStoreAll(OutputInventory, recipe.CombinedOutputs))
+                if (!MachineOutputInventoryRules.CanStoreAll(OutputInventory, recipe.CombinedOutputs))
                 {
                     Status = MachineOperationStatus.OutputFull;
                     break;
@@ -272,7 +436,14 @@ public sealed class MachineState
                     break;
                 }
 
-                if (allocatedPowerKilowatts + Epsilon < recipe.RequiredPowerKilowatts)
+                if (Definition.Id == MachineDefinitionIds.MobileMiner &&
+                    !EnsureMobileMinerEnergyAvailable())
+                {
+                    Status = MachineOperationStatus.WaitingForEnergy;
+                    break;
+                }
+
+                if (allocatedPowerKilowatts + Epsilon < requiredPower)
                 {
                     Status = MachineOperationStatus.WaitingForEnergy;
                     break;
@@ -287,18 +458,45 @@ public sealed class MachineState
                 ProductionProgressSeconds = 0;
             }
 
-            if (allocatedPowerKilowatts + Epsilon < recipe.RequiredPowerKilowatts)
+            if (Definition.Id == MachineDefinitionIds.MobileMiner &&
+                !EnsureMobileMinerEnergyAvailable())
             {
                 Status = MachineOperationStatus.WaitingForEnergy;
                 break;
             }
 
-            var advancedSeconds = Math.Min(
-                remainingSeconds,
+            if (allocatedPowerKilowatts + Epsilon < requiredPower)
+            {
+                Status = MachineOperationStatus.WaitingForEnergy;
+                break;
+            }
+
+            var realSecondsAvailable = remainingSeconds;
+            if (Definition.Id == MachineDefinitionIds.MobileMiner)
+            {
+                realSecondsAvailable = Math.Min(
+                    realSecondsAvailable,
+                    InternalEnergyKilowattSeconds /
+                    MachineEnergyConfiguration.MobileMinerInternalPowerKilowatts);
+            }
+
+            var workSeconds = Math.Min(
+                realSecondsAvailable * workRate,
                 recipe.DurationSeconds - ProductionProgressSeconds);
-            ProductionProgressSeconds += advancedSeconds;
-            remainingSeconds -= advancedSeconds;
-            consumedEnergy += advancedSeconds * recipe.RequiredPowerKilowatts;
+            var realSecondsAdvanced = workSeconds / workRate;
+            ProductionProgressSeconds += workSeconds;
+            remainingSeconds -= realSecondsAdvanced;
+            if (Definition.Id == MachineDefinitionIds.MobileMiner)
+            {
+                InternalEnergyKilowattSeconds = Math.Max(
+                    0,
+                    InternalEnergyKilowattSeconds -
+                    (realSecondsAdvanced * MachineEnergyConfiguration.MobileMinerInternalPowerKilowatts));
+            }
+            else
+            {
+                consumedEnergy += realSecondsAdvanced * requiredPower;
+            }
             Status = MachineOperationStatus.Producing;
 
             if (remainingSeconds <= Epsilon && ProductionProgressSeconds + Epsilon < recipe.DurationSeconds)
@@ -326,9 +524,15 @@ public sealed class MachineState
 
         var fuelId = Definition.GeneratorFuelItemId!.Value;
         var returnedContainerId = Definition.GeneratorReturnedContainerItemId!.Value;
-        var loadableFuelItems = Math.Min(
-            InputInventory.GetAmount(fuelId),
-            ProductionInventoryRules.GetAvailableCapacity(OutputInventory, returnedContainerId));
+        var returnContainerCapacity = MachineOutputInventoryRules.GetAvailableCapacity(
+            OutputInventory,
+            returnedContainerId);
+        if (Definition.Id != MachineDefinitionIds.FuelGenerator && returnContainerCapacity <= 0)
+        {
+            return 0;
+        }
+
+        var loadableFuelItems = Math.Min(InputInventory.GetAmount(fuelId), returnContainerCapacity);
         var availableFuelSeconds = GeneratorFuelSecondsRemaining +
                                    loadableFuelItems * Definition.GeneratorFuelSecondsPerItem;
         return Definition.GeneratedPowerKilowatts * Math.Min(1, availableFuelSeconds / deltaSeconds);
@@ -347,19 +551,40 @@ public sealed class MachineState
             return;
         }
 
+        if (Definition.Id != MachineDefinitionIds.FuelGenerator &&
+            !MachineOutputInventoryRules.CanStoreAll(
+                OutputInventory,
+                [new ItemAmount(Definition.GeneratorReturnedContainerItemId!.Value, 1)]))
+        {
+            throw new InvalidOperationException("The generator output is full.");
+        }
+
         var fuelSecondsNeeded = energyKilowattSeconds / Definition.GeneratedPowerKilowatts;
         while (GeneratorFuelSecondsRemaining + Epsilon < fuelSecondsNeeded)
         {
             var fuelId = Definition.GeneratorFuelItemId!.Value;
             var returnedContainerId = Definition.GeneratorReturnedContainerItemId!.Value;
             if (InputInventory.GetAmount(fuelId) == 0 ||
-                !ProductionInventoryRules.CanStoreAll(OutputInventory, [new ItemAmount(returnedContainerId, 1)]))
+                !MachineOutputInventoryRules.CanStoreAll(OutputInventory, [new ItemAmount(returnedContainerId, 1)]))
             {
                 throw new InvalidOperationException("The generator cannot provide its preallocated energy.");
             }
 
-            if (!InputInventory.Remove(fuelId, 1).Succeeded || !OutputInventory.Add(returnedContainerId, 1).Succeeded)
+            if (!InputInventory.Remove(fuelId, 1).Succeeded)
             {
+                throw new InvalidOperationException("A generator fuel container transaction failed.");
+            }
+
+            if (!MachineOutputInventoryRules.TryAddAll(
+                    OutputInventory,
+                    [new ItemAmount(returnedContainerId, 1)]))
+            {
+                if (!InputInventory.Add(fuelId, 1).Succeeded)
+                {
+                    throw new InvalidOperationException(
+                        "A failed generator output transaction could not restore its fuel item.");
+                }
+
                 throw new InvalidOperationException("A generator fuel container transaction failed.");
             }
 
@@ -384,6 +609,15 @@ public sealed class MachineState
         {
             Status = MachineOperationStatus.Disabled;
         }
+        else if (Definition.IsFuelledGenerator &&
+                 (Definition.Id != MachineDefinitionIds.FuelGenerator ||
+                  GeneratorFuelSecondsRemaining <= Epsilon) &&
+                 !MachineOutputInventoryRules.CanStoreAll(
+                     OutputInventory,
+                     [new ItemAmount(Definition.GeneratorReturnedContainerItemId!.Value, 1)]))
+        {
+            Status = MachineOperationStatus.OutputFull;
+        }
         else if (suppliedPowerKilowatts > Epsilon)
         {
             Status = MachineOperationStatus.Producing;
@@ -393,13 +627,6 @@ public sealed class MachineState
         {
             Status = MachineOperationStatus.WaitingForMaterial;
         }
-        else if (Definition.IsFuelledGenerator && GeneratorFuelSecondsRemaining <= Epsilon &&
-                 !ProductionInventoryRules.CanStoreAll(
-                     OutputInventory,
-                     [new ItemAmount(Definition.GeneratorReturnedContainerItemId!.Value, 1)]))
-        {
-            Status = MachineOperationStatus.OutputFull;
-        }
         else
         {
             Status = MachineOperationStatus.Ready;
@@ -408,7 +635,7 @@ public sealed class MachineState
 
     private bool TryCompleteBatch(RecipeDefinition recipe)
     {
-        if (!ProductionInventoryRules.TryAddAll(OutputInventory, recipe.CombinedOutputs))
+        if (!MachineOutputInventoryRules.TryAddAll(OutputInventory, recipe.CombinedOutputs))
         {
             return false;
         }
@@ -447,6 +674,83 @@ public sealed class MachineState
         }
     }
 
+    private bool HasMatchingExtractionSource(RecipeDefinition recipe) =>
+        !recipe.IsExtractionRecipe ||
+        ExtractionSource is not null && recipe.SourceResourceId == ExtractionSource.ResourceId;
+
+    private bool IsMobileMinerWithoutAvailableEnergy(RecipeDefinition recipe) =>
+        recipe.IsExtractionRecipe && Definition.Id == MachineDefinitionIds.MobileMiner &&
+        InternalEnergyKilowattSeconds <= Epsilon &&
+        InputInventory.GetAmount(ProductionItemIds.MobileBatteryPack) == 0;
+
+    private bool EnsureMobileMinerEnergyAvailable()
+    {
+        if (InternalEnergyKilowattSeconds > Epsilon)
+        {
+            return true;
+        }
+
+        if (!InputInventory.Remove(ProductionItemIds.MobileBatteryPack, 1).Succeeded)
+        {
+            return false;
+        }
+
+        InternalEnergyKilowattSeconds = MachineEnergyConfiguration.MobileBatteryPackEnergyKilowattSeconds;
+        return true;
+    }
+
+    private double GetProductionWorkRate(RecipeDefinition recipe)
+    {
+        if (!recipe.IsExtractionRecipe || ExtractionSource is null)
+        {
+            return Definition.SpeedMultiplier;
+        }
+
+        var unitsPerCycle = recipe.Outputs
+            .Where(output => output.ItemId == ExtractionSource.ResourceId)
+            .Sum(output => output.Amount);
+        if (unitsPerCycle <= 0)
+        {
+            throw new InvalidOperationException("An extraction recipe must output its bound source resource.");
+        }
+
+        var desiredUnitsPerSecond = MiningConfiguration.GetExtractionUnitsPerMinute(
+                                        ExtractionSource.BaseExtractionUnitsPerMinute,
+                                        ExtractionSource.Purity) *
+                                    Definition.SpeedMultiplier / 60;
+        return desiredUnitsPerSecond * recipe.DurationSeconds / unitsPerCycle;
+    }
+
+    private double GetEffectiveRequiredPowerKilowatts(RecipeDefinition recipe)
+    {
+        if (Definition.Id == MachineDefinitionIds.MobileMiner)
+        {
+            return 0;
+        }
+
+        var purityEfficiency = recipe.IsExtractionRecipe && ExtractionSource is not null
+            ? MiningConfiguration.GetEnergyEfficiencyMultiplier(ExtractionSource.Purity)
+            : 1;
+        return recipe.RequiredPowerKilowatts /
+               (Definition.EfficiencyMultiplier * purityEfficiency);
+    }
+
+    private void EnsureBatteryBank()
+    {
+        if (Definition.Id != MachineDefinitionIds.BatteryBank)
+        {
+            throw new InvalidOperationException("Only a battery bank stores grid energy.");
+        }
+    }
+
+    private static void ValidateEnergyAmount(double energyKilowattSeconds)
+    {
+        if (!double.IsFinite(energyKilowattSeconds) || energyKilowattSeconds < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(energyKilowattSeconds));
+        }
+    }
+
     private static void ValidateDelta(double deltaSeconds)
     {
         if (!double.IsFinite(deltaSeconds) || deltaSeconds < 0)
@@ -471,6 +775,7 @@ public sealed class MachineState
             throw new ArgumentException("Persisted machine inventory slots must be unique.", nameof(snapshots));
         }
 
+        var occupiedIndices = snapshots.Select(snapshot => snapshot.Index).ToHashSet();
         foreach (var snapshot in snapshots)
         {
             if (snapshot.Index < 0 || snapshot.Index >= inventory.SlotCount ||
@@ -479,7 +784,31 @@ public sealed class MachineState
                 throw new ArgumentException("A persisted machine inventory slot is invalid.", nameof(snapshots));
             }
 
-            inventory.GetMutableSlot(snapshot.Index).Assign(snapshot.ItemId, snapshot.Amount);
+            var maximum = inventory.GetMaximumStackSize(snapshot.ItemId);
+            var firstAmount = Math.Min(snapshot.Amount, maximum);
+            inventory.GetMutableSlot(snapshot.Index).Assign(snapshot.ItemId, firstAmount);
+            var remaining = snapshot.Amount - firstAmount;
+            while (remaining > 0)
+            {
+                var overflowSlot = Enumerable.Range(0, inventory.SlotCount)
+                    .FirstOrDefault(index => !occupiedIndices.Contains(index) && inventory.GetSlot(index).IsEmpty, -1);
+                if (overflowSlot < 0)
+                {
+                    throw new ArgumentException(
+                        "A legacy machine inventory stack cannot be split without losing items.",
+                        nameof(snapshots));
+                }
+
+                var amount = Math.Min(remaining, maximum);
+                inventory.GetMutableSlot(overflowSlot).Assign(snapshot.ItemId, amount);
+                occupiedIndices.Add(overflowSlot);
+                remaining -= amount;
+            }
         }
     }
+
+    private static int ResolveItemStackSize(ItemId itemId) =>
+        DefaultProductionItemCatalog.Instance.TryGet(itemId, out var definition) && definition is not null
+            ? definition.MaximumStackSize
+            : InventoryConfiguration.MaximumStackSize;
 }

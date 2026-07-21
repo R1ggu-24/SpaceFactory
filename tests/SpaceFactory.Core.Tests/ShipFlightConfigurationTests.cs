@@ -10,8 +10,17 @@ public sealed class ShipFlightConfigurationTests
         Assert.Equal(650 * 1.5, ShipFlightConfiguration.NormalFlightSpeed);
         Assert.Equal(1_300 * 2.0, ShipFlightConfiguration.BoostFlightSpeed);
         Assert.Equal(
+            ShipFlightConfiguration.StandardBoostFlightSpeed * 1.7,
+            ShipFlightConfiguration.HighPerformanceBoostFlightSpeed,
+            precision: 12);
+        Assert.Equal(
             ShipFlightConfiguration.BoostFlightSpeed / ShipFlightConfiguration.NormalFlightSpeed,
             ShipFlightConfiguration.BoostSpeedMultiplier,
+            precision: 12);
+        Assert.Equal(
+            ShipFlightConfiguration.HighPerformanceBoostFlightSpeed /
+            ShipFlightConfiguration.NormalFlightSpeed,
+            ShipFlightConfiguration.HighPerformanceBoostSpeedMultiplier,
             precision: 12);
         Assert.Equal(1_350 * 1.5, ShipFlightConfiguration.NormalAcceleration);
         Assert.Equal(1_750 * 1.5, ShipFlightConfiguration.NormalDeceleration);

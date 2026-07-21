@@ -70,6 +70,8 @@ public sealed class ConnectedPowerGridSimulation
                 runtime.ExternalSources,
                 state.CanDeliverPower);
             var actualConsumption = dispatch.ConsumedEnergyKilowattSeconds / deltaSeconds;
+            var actualProduction = (dispatch.SourceAllocations ?? [])
+                .Sum(source => source.SuppliedKilowatts);
             var fuelPerMinute = dispatch.ConsumedFuel / deltaSeconds * 60;
             var remainingFuel = runtime.ExternalSources
                 .GroupBy(source => source.ResourcePoolId, StringComparer.Ordinal)
@@ -77,10 +79,11 @@ public sealed class ConnectedPowerGridSimulation
             var status = ResolveStatus(state, overloaded, forecast, actualConsumption);
             var metrics = new PowerGridMetrics(
                 forecast.MaximumCapacityKilowatts,
-                actualConsumption,
+                actualProduction,
                 forecast.RequestedPowerKilowatts,
                 actualConsumption,
-                forecast.MaximumCapacityKilowatts - forecast.RequestedPowerKilowatts,
+                forecast.MaximumCapacityKilowatts -
+                Math.Max(forecast.RequestedPowerKilowatts, actualProduction),
                 forecast.ActiveSourceCount,
                 status,
                 fuelPerMinute,

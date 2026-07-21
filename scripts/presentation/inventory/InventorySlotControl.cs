@@ -5,7 +5,7 @@ namespace SpaceFactory.Presentation.InventoryUI;
 
 public partial class InventorySlotControl : PanelContainer
 {
-    private const string DragKind = "space_factory_inventory_slot";
+    public const string DragDataKind = "space_factory_inventory_slot";
 
     private enum DropTargetState
     {
@@ -17,13 +17,14 @@ public partial class InventorySlotControl : PanelContainer
     private ResourceIconControl _icon = null!;
     private PanelContainer _amountBadge = null!;
     private Label _amount = null!;
-    private Label _emptyMarker = null!;
     private Label _fullMarker = null!;
+    private Label _shortcut = null!;
     private ItemPresentationViewModel? _item;
     private bool _isEmpty = true;
-    private bool _isFull;
     private bool _hovered;
     private bool _selected;
+    private bool _dragEnabled = true;
+    private bool _isHandSlot;
     private int _amountValue;
     private string _baseTooltip = string.Empty;
     private DropTargetState _dropTargetState;
@@ -31,6 +32,7 @@ public partial class InventorySlotControl : PanelContainer
     private Func<InventorySlotAddress, InventorySlotAddress, InventoryTransferResult>? _previewTransfer;
     private Func<InventorySlotAddress, InventorySlotAddress, bool>? _transferRequested;
     private Action<InventorySlotAddress>? _selectionRequested;
+    private Action<InventoryItemContextRequest, Vector2>? _contextRequested;
 
     public string InventoryId { get; private set; } = string.Empty;
 
@@ -38,13 +40,29 @@ public partial class InventorySlotControl : PanelContainer
 
     public InventorySlotAddress Address => new(InventoryId, SlotIndex);
 
+    public bool HasShortcutLabel => _shortcut.Visible && !string.IsNullOrWhiteSpace(_shortcut.Text);
+
+    public bool IsHandSlotPresentation => _isHandSlot;
+
+    public bool HasLegacyItemMarkers => _fullMarker.Visible || _shortcut.Visible;
+
+    public bool HasUnobstructedDragSurface =>
+        GetNode<Control>("Margin").MouseFilter == MouseFilterEnum.Ignore &&
+        GetNode<Control>("Margin/SlotContent").MouseFilter == MouseFilterEnum.Ignore;
+
+    public float PresentedSlotSize => CustomMinimumSize.X;
+
     public override void _Ready()
     {
+        // The slot root owns selection and drag. Decorative children must never become
+        // the GUI pick target, otherwise Godot asks the inner MarginContainer for drag data.
+        GetNode<Control>("Margin").MouseFilter = MouseFilterEnum.Ignore;
+        GetNode<Control>("Margin/SlotContent").MouseFilter = MouseFilterEnum.Ignore;
         _icon = GetNode<ResourceIconControl>("Margin/SlotContent/Icon");
         _amountBadge = GetNode<PanelContainer>("Margin/SlotContent/AmountBadge");
         _amount = GetNode<Label>("Margin/SlotContent/AmountBadge/Amount");
-        _emptyMarker = GetNode<Label>("Margin/SlotContent/EmptyMarker");
         _fullMarker = GetNode<Label>("Margin/SlotContent/FullMarker");
+        _shortcut = GetNode<Label>("Margin/SlotContent/Shortcut");
         MouseEntered += OnMouseEntered;
         MouseExited += OnMouseExited;
         SetProcess(false);
@@ -54,6 +72,7 @@ public partial class InventorySlotControl : PanelContainer
 
     public override void _ExitTree()
     {
+        ItemHoverNamePresenter.End(this);
         MouseEntered -= OnMouseEntered;
         MouseExited -= OnMouseExited;
         _feedbackTween?.Kill();
@@ -67,16 +86,30 @@ public partial class InventorySlotControl : PanelContainer
         }
 
         _dropTargetState = DropTargetState.None;
-        TooltipText = _baseTooltip;
+        TooltipText = string.Empty;
         SetProcess(false);
         RefreshStyle();
     }
 
     public override void _GuiInput(InputEvent @event)
     {
-        if (@event is InputEventMouseButton { ButtonIndex: MouseButton.Left, Pressed: true })
+        if (@event is not InputEventMouseButton { Pressed: true } pointer)
+        {
+            return;
+        }
+
+        if (pointer.ButtonIndex == MouseButton.Left)
         {
             _selectionRequested?.Invoke(Address);
+            return;
+        }
+
+        if (pointer.ButtonIndex == MouseButton.Right && !_isEmpty && _item is not null)
+        {
+            _contextRequested?.Invoke(
+                new InventoryItemContextRequest(Address, _item.Id, _item.DisplayName, _amountValue),
+                GetGlobalMousePosition());
+            AcceptEvent();
         }
     }
 
@@ -86,13 +119,15 @@ public partial class InventorySlotControl : PanelContainer
         ItemPresentationViewModel? item,
         Func<InventorySlotAddress, InventorySlotAddress, InventoryTransferResult> previewTransfer,
         Func<InventorySlotAddress, InventorySlotAddress, bool> transferRequested,
-        Action<InventorySlotAddress> selectionRequested)
+        Action<InventorySlotAddress> selectionRequested,
+        Action<InventoryItemContextRequest, Vector2>? contextRequested = null)
     {
         InventoryId = inventoryId;
         SlotIndex = slot.Index;
         _previewTransfer = previewTransfer;
         _transferRequested = transferRequested;
         _selectionRequested = selectionRequested;
+        _contextRequested = contextRequested;
         Refresh(slot, item);
     }
 
@@ -104,23 +139,30 @@ public partial class InventorySlotControl : PanelContainer
         var stackLimit = item is null
             ? slot.MaximumAmount
             : Math.Min(slot.MaximumAmount, item.MaximumStackSize);
-        _isFull = !slot.IsEmpty && slot.Amount >= stackLimit;
         _amountValue = slot.Amount;
-        _emptyMarker.Visible = slot.IsEmpty;
-        _amountBadge.Visible = !slot.IsEmpty;
-        _fullMarker.Visible = _isFull;
-        _amount.Text = slot.IsEmpty ? string.Empty : slot.Amount.ToString();
+        _amountBadge.Visible = !slot.IsEmpty && stackLimit > 1;
+        _fullMarker.Visible = false;
+        _shortcut.Visible = false;
+        _amount.Text = slot.IsEmpty || stackLimit == 1 ? string.Empty : slot.Amount.ToString();
         _icon.Configure(slot.IsEmpty ? null : item);
         _baseTooltip = slot.IsEmpty
             ? $"Leerer Slot {slot.Index + 1}"
             : $"{item?.DisplayName ?? slot.ItemId?.Value ?? "Unbekannter Gegenstand"}\n{slot.Amount} / {stackLimit}";
-        TooltipText = _baseTooltip;
+        TooltipText = string.Empty;
+        if (_hovered)
+        {
+            ItemHoverNamePresenter.End(this);
+            if (!_isEmpty && _item is not null)
+            {
+                ItemHoverNamePresenter.Begin(this, _item.DisplayName);
+            }
+        }
         RefreshStyle();
     }
 
     public void SetSlotSize(float size, bool compact)
     {
-        size = Mathf.Clamp(size, 38, 84);
+        size = Mathf.Clamp(size, InventoryUiConfiguration.ToolSlotSize, 84);
         CustomMinimumSize = new Vector2(size, size);
         GetNode<Control>("Margin/SlotContent").CustomMinimumSize = new Vector2(
             Mathf.Max(30, size - 8),
@@ -140,6 +182,21 @@ public partial class InventorySlotControl : PanelContainer
         RefreshStyle();
     }
 
+    public void SetShortcutLabel(string? text)
+    {
+        _ = text;
+        _shortcut.Text = string.Empty;
+        _shortcut.Visible = false;
+    }
+
+    public void SetDragEnabled(bool enabled) => _dragEnabled = enabled;
+
+    public void SetHandSlotPresentation(bool enabled)
+    {
+        _isHandSlot = enabled;
+        RefreshStyle();
+    }
+
     public void PlayTransferFeedback(bool succeeded)
     {
         _feedbackTween?.Kill();
@@ -154,25 +211,20 @@ public partial class InventorySlotControl : PanelContainer
 
     public override Variant _GetDragData(Vector2 atPosition)
     {
-        if (_isEmpty)
+        if (!_dragEnabled || _isEmpty)
         {
             return default;
         }
 
         _selectionRequested?.Invoke(Address);
-        var dragData = new Godot.Collections.Dictionary
-        {
-            ["kind"] = DragKind,
-            ["inventory_id"] = InventoryId,
-            ["slot_index"] = SlotIndex,
-        };
+        var dragData = CreateDragData(Address);
         SetDragPreview(CreateDragPreview());
         return dragData;
     }
 
     public override bool _CanDropData(Vector2 atPosition, Variant data)
     {
-        if (!TryReadAddress(data, out var source))
+        if (!TryReadDragAddress(data, out var source))
         {
             return false;
         }
@@ -191,14 +243,14 @@ public partial class InventorySlotControl : PanelContainer
 
     public override void _DropData(Vector2 atPosition, Variant data)
     {
-        if (_transferRequested is null || !TryReadAddress(data, out var source) || source == Address)
+        if (_transferRequested is null || !TryReadDragAddress(data, out var source) || source == Address)
         {
             return;
         }
 
         var succeeded = _transferRequested(source, Address);
         _dropTargetState = DropTargetState.None;
-        TooltipText = _baseTooltip;
+        TooltipText = string.Empty;
         SetProcess(false);
         PlayTransferFeedback(succeeded);
         RefreshStyle();
@@ -232,7 +284,7 @@ public partial class InventorySlotControl : PanelContainer
 
         var amount = new Label
         {
-            Text = _amountValue.ToString(),
+            Text = _item?.MaximumStackSize == 1 ? string.Empty : _amountValue.ToString(),
             HorizontalAlignment = HorizontalAlignment.Right,
             VerticalAlignment = VerticalAlignment.Bottom,
             MouseFilter = MouseFilterEnum.Ignore,
@@ -250,7 +302,7 @@ public partial class InventorySlotControl : PanelContainer
         return preview;
     }
 
-    private static bool TryReadAddress(Variant data, out InventorySlotAddress address)
+    public static bool TryReadDragAddress(Variant data, out InventorySlotAddress address)
     {
         address = default;
         if (data.VariantType != Variant.Type.Dictionary)
@@ -260,7 +312,7 @@ public partial class InventorySlotControl : PanelContainer
 
         var dictionary = data.AsGodotDictionary();
         if (!dictionary.ContainsKey("kind") ||
-            dictionary["kind"].AsString() != DragKind ||
+            dictionary["kind"].AsString() != DragDataKind ||
             !dictionary.ContainsKey("inventory_id") ||
             !dictionary.ContainsKey("slot_index"))
         {
@@ -273,17 +325,29 @@ public partial class InventorySlotControl : PanelContainer
         return !string.IsNullOrWhiteSpace(address.InventoryId) && address.SlotIndex >= 0;
     }
 
+    public static Godot.Collections.Dictionary CreateDragData(InventorySlotAddress address) => new()
+    {
+        ["kind"] = DragDataKind,
+        ["inventory_id"] = address.InventoryId,
+        ["slot_index"] = address.SlotIndex,
+    };
+
     private void OnMouseEntered()
     {
         _hovered = true;
+        if (!_isEmpty && _item is not null)
+        {
+            ItemHoverNamePresenter.Begin(this, _item.DisplayName);
+        }
         RefreshStyle();
     }
 
     private void OnMouseExited()
     {
+        ItemHoverNamePresenter.End(this);
         _hovered = false;
         _dropTargetState = DropTargetState.None;
-        TooltipText = _baseTooltip;
+        TooltipText = string.Empty;
         SetProcess(false);
         RefreshStyle();
     }
@@ -315,12 +379,20 @@ public partial class InventorySlotControl : PanelContainer
         var border = _isEmpty
             ? new Color(0.07f, 0.25f, 0.31f, 0.78f)
             : new Color(0.06f, 0.49f, 0.61f, 0.9f);
-        const int borderWidth = 1;
+        var borderWidth = _isHandSlot ? 2 : 1;
+
+        if (_isHandSlot)
+        {
+            background = new Color(0.025f, 0.035f, 0.065f, 0.985f);
+            border = new Color(0.38f, 0.58f, 0.92f, 0.94f);
+        }
 
         if (_selected)
         {
             background = background.Lightened(0.035f);
-            border = new Color(0.23f, 0.78f, 0.96f, 0.98f);
+            border = _isHandSlot
+                ? new Color(0.48f, 0.9f, 1f, 1f)
+                : new Color(0.23f, 0.78f, 0.96f, 0.98f);
         }
 
         if (_hovered)
@@ -368,6 +440,7 @@ public partial class InventorySlotControl : PanelContainer
             InventoryTransferFailure.SourceEmpty => "Ungültig: Quellslot ist leer",
             InventoryTransferFailure.TargetStackFull => "Ungültig: Zielstapel ist voll",
             InventoryTransferFailure.IncompatibleStacks => "Ungültig: Stapel nicht kompatibel",
+            InventoryTransferFailure.ItemNotAccepted => "Ungültig: Gegenstandstyp nicht erlaubt",
             InventoryTransferFailure.StackLimitExceeded => "Ungültig: Stapelgrenze überschritten",
             InventoryTransferFailure.InsufficientItems => "Ungültig: Menge nicht verfügbar",
             _ => "Ungültiges Transferziel",

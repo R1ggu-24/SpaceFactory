@@ -180,6 +180,38 @@ public sealed class ShipDockingTests
     }
 
     [Fact]
+    public void RestoreProjection_RebuildsDistanceAndRotationFromCurrentSurface()
+    {
+        var direction = ShipDockingRestoreRules.ResolveRadialDirection(
+            new WorldPosition(800, -600),
+            persistedRelativeRotationRadians: 0);
+        var projection = ShipDockingRestoreRules.ProjectOntoCurrentSurface(
+            new WorldPosition(1200, -900),
+            direction,
+            centerClearance: 270);
+
+        Assert.Equal(0.8, direction.X, precision: 10);
+        Assert.Equal(-0.6, direction.Y, precision: 10);
+        Assert.Equal(1416, projection.RelativeAttachmentPosition.X, precision: 10);
+        Assert.Equal(-1062, projection.RelativeAttachmentPosition.Y, precision: 10);
+        Assert.Equal(
+            Math.Atan2(-0.6, 0.8) + (Math.PI * 0.5),
+            projection.RelativeAttachmentRotationRadians,
+            precision: 10);
+    }
+
+    [Fact]
+    public void RestoreProjection_ZeroLegacyPositionUsesPersistedOrientation()
+    {
+        var direction = ShipDockingRestoreRules.ResolveRadialDirection(
+            default,
+            persistedRelativeRotationRadians: Math.PI);
+
+        Assert.Equal(0, direction.X, precision: 10);
+        Assert.Equal(1, direction.Y, precision: 10);
+    }
+
+    [Fact]
     public void PressGate_HeldKeyProducesOnlyOneAction()
     {
         var gate = new ShipDockingPressGate();

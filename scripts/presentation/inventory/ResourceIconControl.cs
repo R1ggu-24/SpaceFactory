@@ -10,6 +10,7 @@ namespace SpaceFactory.Presentation.InventoryUI;
 public partial class ResourceIconControl : Control
 {
     private ItemPresentationViewModel? _item;
+    private Texture2D? _texture;
     private Color _itemColor = new(0.35f, 0.65f, 0.75f);
     private uint _seed;
 
@@ -23,6 +24,9 @@ public partial class ResourceIconControl : Control
         _item = item;
         _itemColor = item?.Color ?? new Color(0.35f, 0.65f, 0.75f);
         _seed = StableHash(item?.Id.Value ?? string.Empty);
+        _texture = item?.TexturePath is { } texturePath
+            ? GD.Load<Texture2D>(texturePath)
+            : null;
         Visible = item is not null;
         QueueRedraw();
     }
@@ -36,6 +40,16 @@ public partial class ResourceIconControl : Control
 
         var center = Size * 0.5f;
         var radius = Mathf.Min(Size.X, Size.Y) * 0.38f;
+        if (_texture is not null)
+        {
+            var textureSize = _texture.GetSize();
+            var maximumSize = Size * 0.84f;
+            var scale = Mathf.Min(maximumSize.X / textureSize.X, maximumSize.Y / textureSize.Y);
+            var drawSize = textureSize * scale;
+            DrawTextureRect(_texture, new Rect2(center - (drawSize * 0.5f), drawSize), false);
+            return;
+        }
+
         if (!_item.UsesResourceIcon)
         {
             DrawProductionIcon(center, radius);
@@ -187,9 +201,13 @@ public partial class ResourceIconControl : Control
         };
         DrawColoredPolygon(frame, dark with { A = 0.82f });
         DrawPolyline(Close(frame), _itemColor.Lightened(0.22f) with { A = 0.78f }, 1.1f, true);
+        DrawMaterialTexture(center, radius, dark, light);
 
         switch (_item!.Glyph)
         {
+            case ItemIconGlyph.RawResource:
+                DrawRawMaterial(center, radius, body, light);
+                break;
             case ItemIconGlyph.Powder:
                 DrawPowder(center, radius, body, light);
                 break;
@@ -248,6 +266,18 @@ public partial class ResourceIconControl : Control
             case ItemIconGlyph.Container:
                 DrawContainer(center, radius, body, light, _item.IsEmptyContainer);
                 break;
+            case ItemIconGlyph.Tool:
+                DrawTool(center, radius, body, light);
+                break;
+            case ItemIconGlyph.Research:
+                DrawResearchPack(center, radius, body, light);
+                break;
+            case ItemIconGlyph.Radioactive:
+                DrawRadioactive(center, radius, body, light);
+                break;
+            case ItemIconGlyph.Waste:
+                DrawWaste(center, radius, body, light);
+                break;
             default:
                 DrawUnknown(center, radius, body, light);
                 break;
@@ -261,6 +291,35 @@ public partial class ResourceIconControl : Control
             true);
     }
 
+    private void DrawMaterialTexture(Vector2 center, float radius, Color dark, Color light)
+    {
+        // Stable per-item micro-detail keeps families coherent while preventing identical-looking
+        // cards. The low contrast deliberately preserves legibility at 38-pixel slot sizes.
+        for (var index = 0; index < 4; index++)
+        {
+            var y = center.Y + ((Noise01(610 + index) - 0.5f) * radius * 1.08f);
+            var x = center.X + ((Noise01(630 + index) - 0.5f) * radius * 0.35f);
+            var width = radius * (0.18f + (Noise01(650 + index) * 0.24f));
+            DrawLine(
+                new Vector2(x - width, y),
+                new Vector2(x + width, y + ((Noise01(670 + index) - 0.5f) * radius * 0.13f)),
+                index % 2 == 0 ? light with { A = 0.11f } : dark.Darkened(0.18f) with { A = 0.28f },
+                0.8f,
+                true);
+        }
+
+        foreach (var corner in new[]
+                 {
+                     new Vector2(-0.52f, -0.43f),
+                     new Vector2(0.51f, 0.42f),
+                 })
+        {
+            var position = center + (corner * radius);
+            DrawCircle(position, radius * 0.045f, light with { A = 0.36f });
+            DrawCircle(position, radius * 0.019f, dark with { A = 0.9f });
+        }
+    }
+
     private void DrawPowder(Vector2 center, float radius, Color body, Color light)
     {
         for (var index = 0; index < 13; index++)
@@ -272,6 +331,23 @@ public partial class ResourceIconControl : Control
         }
 
         DrawArc(center, radius * 0.5f, 0.12f, 2.85f, 16, light with { A = 0.48f }, 1.2f, true);
+    }
+
+    private void DrawRawMaterial(Vector2 center, float radius, Color body, Color light)
+    {
+        Vector2[] rock =
+        [
+            center + new Vector2(-0.55f, -0.18f) * radius,
+            center + new Vector2(-0.24f, -0.56f) * radius,
+            center + new Vector2(0.37f, -0.48f) * radius,
+            center + new Vector2(0.58f, 0.04f) * radius,
+            center + new Vector2(0.24f, 0.55f) * radius,
+            center + new Vector2(-0.38f, 0.47f) * radius,
+        ];
+        DrawColoredPolygon(rock, body);
+        DrawPolyline(Close(rock), light, 1.3f, true);
+        DrawCircle(center + new Vector2(-0.18f, -0.12f) * radius, radius * 0.12f, body.Darkened(0.28f));
+        DrawLine(rock[1], center + new Vector2(0.18f, 0.2f) * radius, light with { A = 0.45f }, 1.1f, true);
     }
 
     private void DrawIngot(Vector2 center, float radius, Color body, Color light, bool alloy)
@@ -517,6 +593,73 @@ public partial class ResourceIconControl : Control
         {
             DrawLine(center + new Vector2(-radius * 0.28f, radius * 0.3f), center + new Vector2(radius * 0.28f, -radius * 0.12f), light with { A = 0.5f }, 1.1f, true);
         }
+    }
+
+    private void DrawTool(Vector2 center, float radius, Color body, Color light)
+    {
+        var barrel = new Rect2(
+            center + new Vector2(-radius * 0.55f, -radius * 0.38f),
+            new Vector2(radius * 1.05f, radius * 0.48f));
+        DrawRect(barrel, body.Darkened(0.25f), true);
+        DrawRect(barrel, light, false, 1.3f, true);
+        var grip = new[]
+        {
+            center + new Vector2(-radius * 0.08f, radius * 0.08f),
+            center + new Vector2(radius * 0.22f, radius * 0.08f),
+            center + new Vector2(radius * 0.12f, radius * 0.55f),
+            center + new Vector2(-radius * 0.16f, radius * 0.55f),
+        };
+        DrawColoredPolygon(grip, body);
+        DrawPolyline(Close(grip), light, 1.2f, true);
+        DrawRect(new Rect2(center + new Vector2(-radius * 0.28f, -radius * 0.22f),
+            new Vector2(radius * 0.38f, radius * 0.12f)), _itemColor with { A = 0.8f }, true);
+        DrawLine(center + new Vector2(radius * 0.5f, -radius * 0.14f),
+            center + new Vector2(radius * 0.68f, -radius * 0.14f), light, radius * 0.12f, true);
+    }
+
+    private void DrawResearchPack(Vector2 center, float radius, Color body, Color light)
+    {
+        var cartridge = new Rect2(
+            center + new Vector2(-radius * 0.48f, -radius * 0.52f),
+            new Vector2(radius * 0.96f, radius * 1.04f));
+        DrawRect(cartridge, body.Darkened(0.32f), true);
+        DrawRect(cartridge, light, false, 1.35f, true);
+        DrawCircuit(center, radius * 0.72f, body, light);
+        DrawRect(new Rect2(center + new Vector2(-radius * 0.28f, radius * 0.37f),
+            new Vector2(radius * 0.56f, radius * 0.08f)), _itemColor, true);
+    }
+
+    private void DrawRadioactive(Vector2 center, float radius, Color body, Color light)
+    {
+        DrawCircle(center, radius * 0.52f, body.Darkened(0.28f));
+        DrawArc(center, radius * 0.52f, 0, Mathf.Tau, 24, light, 1.3f, true);
+        DrawCircle(center, radius * 0.1f, light);
+        for (var index = 0; index < 3; index++)
+        {
+            var direction = Vector2.FromAngle((-Mathf.Pi * 0.5f) + (Mathf.Tau * index / 3f));
+            Vector2[] blade =
+            [
+                center + direction * radius * 0.18f,
+                center + direction * radius * 0.47f,
+                center + direction.Rotated(0.48f) * radius * 0.35f,
+            ];
+            DrawColoredPolygon(blade, light);
+        }
+        DrawCircle(center, radius * 0.055f, body.Darkened(0.5f));
+    }
+
+    private void DrawWaste(Vector2 center, float radius, Color body, Color light)
+    {
+        var drum = new Rect2(
+            center + new Vector2(-radius * 0.43f, -radius * 0.54f),
+            new Vector2(radius * 0.86f, radius * 1.08f));
+        DrawRect(drum, body.Darkened(0.28f), true);
+        DrawRect(drum, light, false, 1.35f, true);
+        DrawLine(new Vector2(drum.Position.X, center.Y - radius * 0.3f),
+            new Vector2(drum.End.X, center.Y - radius * 0.3f), light, 1.4f, true);
+        DrawLine(new Vector2(drum.Position.X, center.Y + radius * 0.3f),
+            new Vector2(drum.End.X, center.Y + radius * 0.3f), light, 1.4f, true);
+        DrawRadioactive(center, radius * 0.58f, body, light);
     }
 
     private void DrawUnknown(Vector2 center, float radius, Color body, Color light)

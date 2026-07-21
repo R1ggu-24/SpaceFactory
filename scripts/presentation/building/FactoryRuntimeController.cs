@@ -3,10 +3,14 @@ using SpaceFactory.Application.Factory;
 using SpaceFactory.Core.Construction;
 using SpaceFactory.Core.Common;
 using SpaceFactory.Core.Inventory;
+using SpaceFactory.Core.Items;
+using SpaceFactory.Core.Hazards;
 using SpaceFactory.Core.Logistics;
 using SpaceFactory.Core.Power;
 using SpaceFactory.Core.Production;
 using SpaceFactory.Core.Research;
+using SpaceFactory.Core.Ships.Docking;
+using SpaceFactory.Core.Ships.Fuel;
 using SpaceFactory.Infrastructure.Persistence;
 using SpaceFactory.Presentation.InventoryUI;
 using SpaceFactory.Presentation.Ship;
@@ -40,32 +44,49 @@ public partial class FactoryRuntimeController : Node2D
     private readonly Dictionary<MachineConnectionId, MachineConnectionView> _connectionViews = [];
     private readonly Dictionary<MachineConnectionId, PowerCablePresentationView> _powerCableViews = [];
     private readonly Dictionary<string, AsteroidView> _loadedComets = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, ResourceDepositView> _loadedResourceSources = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, DroppedItemStateData> _droppedItems = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, DroppedItemView> _droppedItemViews = new(StringComparer.Ordinal);
     private readonly Dictionary<string, DateTimeOffset> _lastSimulatedUtc = new(StringComparer.Ordinal);
     private readonly Dictionary<string, PowerNetworkTickResult> _lastPowerResults = new(StringComparer.Ordinal);
     private readonly Dictionary<PowerNetworkId, ConnectedPowerGridTickResult> _lastPowerGridResults = [];
     private readonly Dictionary<MachineInstanceId, double> _lastAvailablePowerByMachine = [];
     private readonly Dictionary<MachineInstanceId, ResearchId> _pendingResearch = [];
+    private readonly DismantlingProgressState _dismantlingProgress = new();
+    private readonly PlacementRotationState _placementRotationState = new();
 
     private SlotInventory _astronautInventory = null!;
+    private SlotInventory _hotbarInventory = null!;
+    private ToolInventoryState _toolInventoryState = null!;
     private SlotInventory? _shipInventory;
     private IReadOnlyList<InventorySlotState> _pendingShipInventory = [];
     private IReadOnlyList<MachineConnectionSnapshot> _pendingShipConnections = [];
     private ShipPowerState _persistedShipPower = ShipPowerState.Default;
     private ShipDockingStateData _persistedShipDocking = ShipDockingStateData.Detached;
     private IReadOnlyList<InventorySlotState> _lastAstronautInventory = [];
+    private IReadOnlyList<InventorySlotState> _lastHotbarInventory = [];
+    private IReadOnlyList<InventorySlotState> _lastToolInventory = [];
     private IReadOnlyList<InventorySlotState> _lastShipInventory = [];
+    private int _lastActiveHotbarSlotIndex;
+    private int _lastSelectedToolSlotIndex;
+    private bool _lastHandModeActive;
     private ItemPresentationCatalog _itemPresentation = null!;
     private IFactoryStateStore _stateStore = null!;
     private Func<double> _shipFuelProvider = null!;
-    private Action<double> _restoreShipFuel = null!;
+    private Func<ShipFuelType> _shipFuelTypeProvider = null!;
+    private Func<int> _activeHotbarSlotProvider = null!;
+    private Action<int> _restoreActiveHotbarSlot = null!;
+    private Action<double, ShipFuelType> _restoreShipFuel = null!;
     private Action<string> _showMessage = null!;
     private ResearchState _research = new();
+    private RadiationExposureState _radiationExposure = new();
     private FirstBasicGeneratorState _firstBasicGenerator = new();
     private MachinePlacementPreview _placementPreview = null!;
     private MachineConnectionPlacementPreview _connectionPlacementPreview = null!;
     private PowerCablePlacementPreview _powerCablePlacementPreview = null!;
     private PowerInteractionTarget? _powerCableSourceTarget;
     private PowerInteractionTarget? _powerCableCandidateTarget;
+    private HotbarPlacementSource? _hotbarPlacementSource;
     private PlayerShipController? _ship;
     private ShipPowerNode? _shipPowerNode;
     private int _sectorSize;
@@ -78,6 +99,11 @@ public partial class FactoryRuntimeController : Node2D
     private bool _initialized;
     private bool _dirty;
     private bool _debugPersistenceSuppressed;
+    private DismantlingTarget? _dismantlingTarget;
+    private Func<Vector2>? _dropOwnerPositionProvider;
+    private Func<Vector2>? _dropOwnerVelocityProvider;
+    private Func<bool>? _dropPickupActiveProvider;
+    private double _droppedItemRefreshElapsed;
 
     public FactoryRuntimeController()
     {
@@ -89,6 +115,21 @@ public partial class FactoryRuntimeController : Node2D
         _connectionPlacementPreview?.IsActive == true ||
         _powerCablePlacementPreview?.IsActive == true;
 
+    /// <summary>
+    /// Distinguishes physical quick-access placement from build-menu placement so
+    /// the central input router can preserve their different wheel behaviour.
+    /// </summary>
+    public bool IsHotbarPlacementActive =>
+        IsPlacementActive && _hotbarPlacementSource is not null;
+
+    public bool IsDismantling => _dismantlingTarget is not null && _dismantlingProgress.IsActive;
+
+    public float DismantlingProgress => (float)_dismantlingProgress.Progress;
+
+    public Vector2? DismantlingTargetWorldPosition => TryGetDismantlingTargetWorldPosition(out var position)
+        ? position
+        : null;
+
     public MachinePlacementFailureReason PlacementFailure =>
         _placementPreview?.CurrentFailure ?? MachinePlacementFailureReason.PlacementNotActive;
 
@@ -96,7 +137,84 @@ public partial class FactoryRuntimeController : Node2D
 
     public IReadOnlyCollection<MachineConnection> Connections => _connectionNetwork.Connections;
 
+    public IReadOnlyCollection<DroppedItemStateData> DroppedItems => _droppedItems.Values.ToArray();
+
     public ResearchState Research => _research;
+
+    public RadiationExposureState RadiationExposure => _radiationExposure;
+
+    public double UpdatePlayerRadiation(double deltaSeconds, Vector2 playerWorldPosition, bool isOnFoot)
+    {
+        if (!double.IsFinite(deltaSeconds) || deltaSeconds < 0 || !playerWorldPosition.IsFinite())
+        {
+            throw new ArgumentOutOfRangeException(nameof(deltaSeconds));
+        }
+
+        var sources = isOnFoot
+            ? CreateLoadedRadiationSources().ToList()
+            : [];
+        if (isOnFoot)
+        {
+            var carriedStrength = GetInventoryRadiationStrength(
+                                      _astronautInventory,
+                                      DefaultProductionItemCatalog.Instance) +
+                                  GetInventoryRadiationStrength(
+                                      _hotbarInventory,
+                                      DefaultProductionItemCatalog.Instance) +
+                                  GetInventoryRadiationStrength(
+                                      _toolInventoryState.Inventory,
+                                      DefaultProductionItemCatalog.Instance);
+            if (carriedStrength > 0)
+            {
+                sources.Add(new RadiationSource(
+                    "astronaut-carried-radioactive-material",
+                    playerWorldPosition.X,
+                    playerWorldPosition.Y,
+                    carriedStrength));
+            }
+        }
+        var suitProtection = _astronautInventory.GetAmount(ProductionItemIds.NuclearRadiationSuit) > 0 ||
+                             _hotbarInventory.GetAmount(ProductionItemIds.NuclearRadiationSuit) > 0 ||
+                             _toolInventoryState.Inventory.GetAmount(ProductionItemIds.NuclearRadiationSuit) > 0
+            ? RadiationConfiguration.NuclearSuitProtection
+            : _astronautInventory.GetAmount(ProductionItemIds.ImprovedRadiationSuit) > 0 ||
+              _hotbarInventory.GetAmount(ProductionItemIds.ImprovedRadiationSuit) > 0 ||
+              _toolInventoryState.Inventory.GetAmount(ProductionItemIds.ImprovedRadiationSuit) > 0
+                ? RadiationConfiguration.ImprovedSuitProtection
+                : RadiationConfiguration.StandardSuitProtection;
+        _radiationExposure.SetSuitProtection(suitProtection);
+        var previousDose = _radiationExposure.AccumulatedDose;
+        var rate = _radiationExposure.Advance(
+            deltaSeconds,
+            playerWorldPosition.X,
+            playerWorldPosition.Y,
+            sources);
+        if (Math.Abs(previousDose - _radiationExposure.AccumulatedDose) > 0.001)
+        {
+            MarkDirty();
+        }
+
+        return rate;
+    }
+
+    public void SynchronizeResourceDiscoveries(IEnumerable<SpaceFactory.Core.Items.ItemId> resourceIds)
+    {
+        ArgumentNullException.ThrowIfNull(resourceIds);
+        var changed = false;
+        foreach (var resourceId in resourceIds.Distinct())
+        {
+            changed |= _research.DiscoverResource(resourceId);
+        }
+
+        if (!changed)
+        {
+            return;
+        }
+
+        MarkDirty();
+        BuildCatalogChanged?.Invoke();
+        FactoryStateChanged?.Invoke();
+    }
 
     public bool HasShipPowerConnections =>
         _pendingShipConnections.Count > 0 ||
@@ -114,6 +232,44 @@ public partial class FactoryRuntimeController : Node2D
 
     public void DebugSetPersistenceSuppressed(bool suppressed) =>
         _debugPersistenceSuppressed = suppressed;
+
+    public void DebugRunDroppedItemRuntimeSmokeTest()
+    {
+        var sourceSlot = _astronautInventory.Slots.FirstOrDefault(slot => slot.IsEmpty)?.Index ?? -1;
+        if (sourceSlot < 0 ||
+            !_astronautInventory.AddToSlot(sourceSlot, ProductionItemIds.CopperWire, 3).Succeeded)
+        {
+            throw new InvalidOperationException("Dropped-item smoke could not prepare an isolated source stack.");
+        }
+
+        var priorIds = _droppedItems.Keys.ToHashSet(StringComparer.Ordinal);
+        var owner = _dropOwnerPositionProvider?.Invoke() ?? Vector2.Zero;
+        if (!TryDropInventoryStack(
+                new InventorySlotAddress(InventoryMenuController.AstronautInventoryId, sourceSlot),
+                owner + new Vector2(520, 75)))
+        {
+            _astronautInventory.RemoveFromSlot(sourceSlot, ProductionItemIds.CopperWire, 3);
+            throw new InvalidOperationException("Dropped-item smoke could not create a safe inertial world stack.");
+        }
+
+        var created = _droppedItems.Values.Single(item => !priorIds.Contains(item.Id));
+        if (created.ItemId != ProductionItemIds.CopperWire.Value || created.Amount != 3 ||
+            new Vector2((float)created.VelocityX, (float)created.VelocityY).Length() >
+            WorldItemDropConfiguration.MaximumInheritedSpeed + 0.01 ||
+            !_droppedItemViews.ContainsKey(created.Id))
+        {
+            throw new InvalidOperationException("Dropped-item smoke observed invalid item, inertia or presentation state.");
+        }
+
+        RemoveDroppedItem(created.Id);
+        if (!_astronautInventory.AddToSlot(sourceSlot, ProductionItemIds.CopperWire, 3).Succeeded ||
+            !_astronautInventory.RemoveFromSlot(sourceSlot, ProductionItemIds.CopperWire, 3).Succeeded)
+        {
+            throw new InvalidOperationException("Dropped-item smoke could not restore its isolated inventory state.");
+        }
+
+        GD.Print("DROPPED_ITEM_RUNTIME_SMOKE_OK: atomic source, safe spawn, inherited bounded inertia, visible view, cleanup");
+    }
 #endif
 
     public event Action<MachineState>? MachineInteractionRequested;
@@ -128,17 +284,18 @@ public partial class FactoryRuntimeController : Node2D
             (OS.HasFeature("headless") ||
              DisplayServer.GetName().Contains("headless", StringComparison.OrdinalIgnoreCase)))
         {
-            FactoryStateJsonCodec.RunSchemaV4SmokeTest();
+            FactoryStateJsonCodec.RunSchemaV6SmokeTest();
             _persistenceSmokeCompleted = true;
             GD.Print(
-                "FACTORY_PERSISTENCE_V4_SMOKE_OK: connections, power switches, ship ports, docking, migrations");
+                "FACTORY_PERSISTENCE_V6_SMOKE_OK: discoveries, extraction bindings, batteries, radiation, inventories, connections, migrations");
         }
 
         _placementPreview = new MachinePlacementPreview { Name = "MachinePlacementPreview" };
         AddChild(_placementPreview);
         _placementPreview.ConfigureWorldSources(
             () => _loadedComets.Values.Where(GodotObject.IsInstanceValid).ToArray(),
-            () => _machineViews.Values.Where(GodotObject.IsInstanceValid).ToArray());
+            () => _machineViews.Values.Where(GodotObject.IsInstanceValid).ToArray(),
+            () => _loadedResourceSources.Values.Where(GodotObject.IsInstanceValid).ToArray());
         _connectionPlacementPreview = new MachineConnectionPlacementPreview
         {
             Name = "MachineConnectionPlacementPreview",
@@ -231,15 +388,13 @@ public partial class FactoryRuntimeController : Node2D
         }
 
         var originalInventory = _astronautInventory;
+        var originalHotbarInventory = _hotbarInventory;
         var originalLastInventory = _lastAstronautInventory;
+        var originalLastHotbarInventory = _lastHotbarInventory;
         var originalDirty = _dirty;
         var originalAutosaveElapsed = _autosaveElapsed;
         var hadLoadedComet = _loadedComets.TryGetValue(comet.CometId, out var previousComet);
         var debugInventory = new SlotInventory(InventoryConfiguration.AstronautSlotCount);
-        if (!debugInventory.Add(ProductionItemIds.PowerCable, 3).Succeeded)
-        {
-            throw new InvalidOperationException("The cable runtime smoke could not create its isolated inventory.");
-        }
 
         var generator = CreatePowerCableSmokeMachine(
             "power-smoke-generator",
@@ -261,6 +416,7 @@ public partial class FactoryRuntimeController : Node2D
         {
             _astronautInventory = debugInventory;
             _loadedComets[comet.CometId] = comet;
+            RunHotbarPlacementSmokeTest();
             foreach (var machine in smokeMachines)
             {
                 if (!_connectionNetwork.RegisterMachine(machine))
@@ -282,6 +438,41 @@ public partial class FactoryRuntimeController : Node2D
             var originalConnectionIds = _connectionNetwork.Connections
                 .Select(connection => connection.Id)
                 .ToHashSet();
+
+            if (!TryResolvePowerEndpoint(generatorPort, out var generatorEndpoint) ||
+                FindNearestPowerInteraction(generatorEndpoint.WorldPosition) != generatorPort ||
+                FindNearestInteractiveMachine(_machineViews[generator.InstanceId].GlobalPosition) is not null ||
+                FindNearestInteractiveMachine(_machineViews[consumer.InstanceId].GlobalPosition)?.InstanceId !=
+                consumer.InstanceId)
+            {
+                throw new InvalidOperationException(
+                    "The shared E target must prefer power overview access at generators while retaining consumer machine menus.");
+            }
+
+            OpenPowerTarget(generatorPort);
+            var standaloneGeneratorModel = RefreshOpenPowerViewModel();
+            ClosePowerTarget();
+            OpenPowerTarget(polePort1);
+            var standalonePoleModel = RefreshOpenPowerViewModel();
+            ClosePowerTarget();
+            var consumerWasRejected = false;
+            try
+            {
+                OpenPowerTarget(consumerPort);
+            }
+            catch (InvalidOperationException)
+            {
+                consumerWasRejected = true;
+            }
+
+            if (standaloneGeneratorModel is null || standalonePoleModel is null || !consumerWasRejected)
+            {
+                throw new InvalidOperationException(
+                    "Only standalone generators, poles and the attached ship may open the power overview.");
+            }
+
+            GD.Print(
+                "POWER_MENU_SCOPE_SMOKE_OK: standalone generator/pole open, production consumer rejected");
 
             ConnectPowerCableForRuntimeSmoke(generatorPort, polePort1);
             ConnectPowerCableForRuntimeSmoke(polePort2, consumerPort);
@@ -368,6 +559,7 @@ public partial class FactoryRuntimeController : Node2D
             GD.Print(
                 "POWER_CABLE_RUNTIME_SMOKE_OK: Build selection, real machine sockets, 3 inventory deductions, " +
                 "generator-pole-machine-ship network, visible cables, disconnect refunds, save-view restore");
+            RunMachineDismantlingSmokeTest(comet);
         }
         finally
         {
@@ -409,9 +601,217 @@ public partial class FactoryRuntimeController : Node2D
             InvalidatePowerTopology(comet.CometId);
             UpdateShipPowerPortVisuals();
             _astronautInventory = originalInventory;
+            _hotbarInventory = originalHotbarInventory;
             _lastAstronautInventory = originalLastInventory;
+            _lastHotbarInventory = originalLastHotbarInventory;
             _dirty = originalDirty;
             _autosaveElapsed = originalAutosaveElapsed;
+        }
+    }
+
+    private void RunHotbarPlacementSmokeTest()
+    {
+        var originalResearch = _research;
+        var originalPlacementRotation = _placementRotationState.LastRotationRadians;
+        var debugHotbar = new SlotInventory(
+            InventoryConfiguration.HotbarSlotCount,
+            InventoryConfiguration.MaximumStackSize,
+            itemId => DefaultProductionItemCatalog.Instance.Get(itemId).MaximumStackSize);
+        if (!debugHotbar.AddToSlot(0, ProductionItemIds.MobileMinerKit, 2).Succeeded ||
+            !debugHotbar.AddToSlot(1, ProductionItemIds.MobileMinerKit, 2).Succeeded ||
+            !debugHotbar.AddToSlot(2, ProductionItemIds.PowerCable, 3).Succeeded ||
+            !debugHotbar.AddToSlot(3, ProductionItemIds.TransportPipe, 2).Succeeded)
+        {
+            throw new InvalidOperationException("The hotbar smoke could not create two isolated placement stacks.");
+        }
+
+        _hotbarInventory = debugHotbar;
+        _research = new ResearchState(
+            [DefaultResearchIds.BasicAutomation, DefaultResearchIds.MiningAutomation]);
+        try
+        {
+            if (!StartPlacement(MachineDefinitionIds.BasicGenerator.Value))
+            {
+                throw new InvalidOperationException(
+                    "The rotation smoke could not start a build-menu machine preview.");
+            }
+
+            var initialRotation = _placementPreview.RelativeRotationRadians;
+            RotatePlacement(1);
+            var rememberedRotation = _placementPreview.RelativeRotationRadians;
+            if (Mathf.IsEqualApprox(initialRotation, rememberedRotation))
+            {
+                throw new InvalidOperationException(
+                    "Rotating a build-menu preview did not update the shared placement angle.");
+            }
+
+            CancelPlacement();
+            if (!StartPlacementFromHotbarSlot(1, ProductionItemIds.MobileMinerKit) ||
+                !_placementPreview.IsActive ||
+                _placementPreview.SelectedDefinitionId != MachineDefinitionIds.MobileMiner ||
+                _hotbarPlacementSource != new HotbarPlacementSource(1, ProductionItemIds.MobileMinerKit) ||
+                !Mathf.IsEqualApprox(
+                    rememberedRotation,
+                    _placementPreview.RelativeRotationRadians))
+            {
+                throw new InvalidOperationException(
+                    "Hotbar machine placement did not start with the last shared build rotation.");
+            }
+
+            var mobileMiner = _machineCatalog.Get(MachineDefinitionIds.MobileMiner);
+            if (mobileMiner.PlacementRequirement != MachinePlacementRequirement.ResourceDeposit ||
+                mobileMiner.PlacementItemId != ProductionItemIds.MobileMinerKit)
+            {
+                throw new InvalidOperationException(
+                    "Mobile miner hotbar placement is not restricted to a resource deposit.");
+            }
+
+            if (!TryConsumeActivePlacementItem(ProductionItemIds.MobileMinerKit) ||
+                debugHotbar.GetSlot(0).Amount != 2 || debugHotbar.GetSlot(1).Amount != 1)
+            {
+                throw new InvalidOperationException(
+                    "Hotbar placement consumed an equal item outside the selected slot.");
+            }
+
+            if (!TryRestoreActivePlacementItem(ProductionItemIds.MobileMinerKit) ||
+                debugHotbar.GetSlot(0).Amount != 2 || debugHotbar.GetSlot(1).Amount != 2)
+            {
+                throw new InvalidOperationException(
+                    "A failed hotbar placement did not restore the item to its selected slot.");
+            }
+
+            CancelPlacement();
+            if (IsPlacementActive || _hotbarPlacementSource is not null)
+            {
+                throw new InvalidOperationException(
+                    "Cancelling after a hotbar slot switch left a placement mode active.");
+            }
+
+            if (!StartPlacementFromHotbarSlot(3, ProductionItemIds.TransportPipe) ||
+                _connectionPlacementPreview.SelectedType is not { } initialPipeType)
+            {
+                throw new InvalidOperationException("The transport pipe did not start from its hotbar item.");
+            }
+
+            var gasSource = new MachineState(
+                new MachineInstanceId("hotbar-gas-source-smoke"),
+                _machineCatalog.Get(MachineDefinitionIds.Electrolyzer),
+                constructionCompleted: true);
+            var gasRecipe = _recipeCatalog.Get(DefaultRecipeIds.ElectrolyzeWater);
+            if (!gasSource.SelectRecipe(gasRecipe) ||
+                ResolveHotbarConnectionType(gasSource, initialPipeType).Kind != ConnectionKind.GasPipe)
+            {
+                throw new InvalidOperationException(
+                    "A transport-pipe item did not select the gas medium from its source recipe.");
+            }
+
+            GD.Print(
+                "HOTBAR_PLACEMENT_SMOKE_OK: automatic mobile-miner mode, resource-source restriction, " +
+                "shared build rotation, selected-slot consume/rollback, pipe-medium resolution, silent cancel");
+        }
+        finally
+        {
+            CancelPlacement();
+            _placementRotationState.Remember(
+                originalPlacementRotation,
+                supportsRotation: true);
+            _research = originalResearch;
+        }
+    }
+
+    private void RunMachineDismantlingSmokeTest(AsteroidView comet)
+    {
+        var machine = CreatePowerCableSmokeMachine(
+            "dismantling-smoke-workbench",
+            MachineDefinitionIds.Workbench,
+            comet.CometId,
+            new Vector2(0, -190));
+        var originalInventory = _astronautInventory;
+        try
+        {
+            if (!_connectionNetwork.RegisterMachine(machine))
+            {
+                throw new InvalidOperationException("The dismantling smoke machine could not be registered.");
+            }
+
+            _machines.Add(machine.InstanceId, machine);
+            IndexMachine(machine);
+            CreateMachineView(machine, comet);
+            var view = _machineViews[machine.InstanceId];
+            var activeRecipe = _recipeCatalog.Get(DefaultRecipeIds.MakeMiningTool);
+            if (!machine.SelectRecipe(activeRecipe) ||
+                !machine.InputInventory.Add(ProductionItemIds.IronPlate, 2).Succeeded ||
+                !machine.InputInventory.Add(ProductionItemIds.CopperWire, 2).Succeeded ||
+                !machine.InputInventory.Add(ProductionItemIds.IronRod, 1).Succeeded)
+            {
+                throw new InvalidOperationException("The dismantling smoke could not seed machine contents.");
+            }
+            var production = machine.TickProduction(
+                activeRecipe,
+                0.5,
+                activeRecipe.RequiredPowerKilowatts);
+            if (!machine.IsBatchInProgress || production.Status != MachineOperationStatus.Producing ||
+                machine.InputInventory.TotalItemCount != 0)
+            {
+                throw new InvalidOperationException(
+                    "The dismantling smoke could not start an in-flight production batch.");
+            }
+
+            var fullInventory = new SlotInventory(
+                1,
+                InventoryConfiguration.MaximumStackSize,
+                itemId => DefaultProductionItemCatalog.Instance.Get(itemId).MaximumStackSize);
+            if (!fullInventory.Add(
+                    ProductionItemIds.IronOre,
+                    InventoryConfiguration.MaximumStackSize).Succeeded)
+            {
+                throw new InvalidOperationException("The dismantling smoke could not create a full inventory.");
+            }
+
+            _astronautInventory = fullInventory;
+            if (TryDismantleMachine(view) || !_machines.ContainsKey(machine.InstanceId) ||
+                !_machineViews.ContainsKey(machine.InstanceId))
+            {
+                throw new InvalidOperationException(
+                    "A full inventory removed a machine before its refund could be stored.");
+            }
+
+            var recoveryInventory = new SlotInventory(
+                InventoryConfiguration.AstronautSlotCount,
+                InventoryConfiguration.MaximumStackSize,
+                itemId => DefaultProductionItemCatalog.Instance.Get(itemId).MaximumStackSize);
+            _astronautInventory = recoveryInventory;
+            if (!TryDismantleMachine(view) || _machines.ContainsKey(machine.InstanceId) ||
+                _machineViews.ContainsKey(machine.InstanceId) ||
+                recoveryInventory.GetAmount(ProductionItemIds.IronPlate) < 2)
+            {
+                throw new InvalidOperationException(
+                    "Machine dismantling did not atomically remove the object and return its contents/materials.");
+            }
+            if (recoveryInventory.GetAmount(ProductionItemIds.CopperWire) < 2 ||
+                recoveryInventory.GetAmount(ProductionItemIds.IronRod) < 1)
+            {
+                throw new InvalidOperationException(
+                    "Machine dismantling lost the inputs reserved by an in-flight batch.");
+            }
+
+            GD.Print(
+                "MACHINE_DISMANTLING_SMOKE_OK: full-inventory rejection, atomic removal, " +
+                "build/content/in-flight refund");
+        }
+        finally
+        {
+            _astronautInventory = originalInventory;
+            if (_machineViews.Remove(machine.InstanceId, out var remainingView) &&
+                GodotObject.IsInstanceValid(remainingView))
+            {
+                remainingView.InteractionRequested -= HandleMachineInteractionRequested;
+                remainingView.QueueFree();
+            }
+
+            _connectionNetwork.UnregisterMachine(machine.InstanceId);
+            _machines.Remove(machine.InstanceId);
+            RemoveIndexedMachine(machine);
         }
     }
 
@@ -434,11 +834,14 @@ public partial class FactoryRuntimeController : Node2D
         PowerInteractionTarget source,
         PowerInteractionTarget target)
     {
-        if (!StartPlacement(ConnectionTypeIds.PowerCable.Value) ||
-            !TryResolvePowerEndpoint(source, out var sourceEndpoint) ||
-            !TryResolvePowerEndpoint(target, out var targetEndpoint))
+        var placementStarted = StartPlacementFromHotbarSlot(2, ProductionItemIds.PowerCable);
+        var sourceResolved = TryResolvePowerEndpoint(source, out var sourceEndpoint);
+        var targetResolved = TryResolvePowerEndpoint(target, out var targetEndpoint);
+        if (!placementStarted || !sourceResolved || !targetResolved)
         {
-            throw new InvalidOperationException("The real power cable build item could not be selected.");
+            throw new InvalidOperationException(
+                $"The real power cable flow could not start " +
+                $"(placement={placementStarted}, source={sourceResolved}, target={targetResolved}).");
         }
 
         PushPowerCableRuntimeSmokeClick(sourceEndpoint.WorldPosition);
@@ -483,6 +886,7 @@ public partial class FactoryRuntimeController : Node2D
             Pressed = false,
         }, inLocalCoords: true);
     }
+
 #endif
 
     public override void _Process(double delta)
@@ -495,6 +899,18 @@ public partial class FactoryRuntimeController : Node2D
         if (_powerCablePlacementPreview.IsActive)
         {
             RefreshPowerCablePlacementCandidate();
+        }
+
+        if (_connectionPlacementPreview.IsActive)
+        {
+            RefreshConnectionPlacementCandidate();
+        }
+
+        _droppedItemRefreshElapsed += delta;
+        if (_droppedItemRefreshElapsed >= 0.2)
+        {
+            _droppedItemRefreshElapsed = 0;
+            RefreshDroppedItems();
         }
 
         _simulationElapsed += delta;
@@ -524,17 +940,27 @@ public partial class FactoryRuntimeController : Node2D
 
     public void Initialize(
         SlotInventory astronautInventory,
+        SlotInventory hotbarInventory,
+        ToolInventoryState toolInventoryState,
         ItemPresentationCatalog itemPresentation,
         IFactoryStateStore stateStore,
         Func<double> shipFuelProvider,
-        Action<double> restoreShipFuel,
+        Func<ShipFuelType> shipFuelTypeProvider,
+        Action<double, ShipFuelType> restoreShipFuel,
+        Func<int> activeHotbarSlotProvider,
+        Action<int> restoreActiveHotbarSlot,
         Action<string> showMessage)
     {
         ArgumentNullException.ThrowIfNull(astronautInventory);
+        ArgumentNullException.ThrowIfNull(hotbarInventory);
+        ArgumentNullException.ThrowIfNull(toolInventoryState);
         ArgumentNullException.ThrowIfNull(itemPresentation);
         ArgumentNullException.ThrowIfNull(stateStore);
         ArgumentNullException.ThrowIfNull(shipFuelProvider);
+        ArgumentNullException.ThrowIfNull(shipFuelTypeProvider);
         ArgumentNullException.ThrowIfNull(restoreShipFuel);
+        ArgumentNullException.ThrowIfNull(activeHotbarSlotProvider);
+        ArgumentNullException.ThrowIfNull(restoreActiveHotbarSlot);
         ArgumentNullException.ThrowIfNull(showMessage);
         if (_initialized)
         {
@@ -542,10 +968,15 @@ public partial class FactoryRuntimeController : Node2D
         }
 
         _astronautInventory = astronautInventory;
+        _hotbarInventory = hotbarInventory;
+        _toolInventoryState = toolInventoryState;
         _itemPresentation = itemPresentation;
         _stateStore = stateStore;
         _shipFuelProvider = shipFuelProvider;
+        _shipFuelTypeProvider = shipFuelTypeProvider;
         _restoreShipFuel = restoreShipFuel;
+        _activeHotbarSlotProvider = activeHotbarSlotProvider;
+        _restoreActiveHotbarSlot = restoreActiveHotbarSlot;
         _showMessage = showMessage;
         Restore(stateStore.Load());
         RememberPlayerInventories();
@@ -575,6 +1006,111 @@ public partial class FactoryRuntimeController : Node2D
         _pendingShipInventory = [];
         RepairMissingStarterPowerCables();
         RememberPlayerInventories();
+    }
+
+    /// <summary>
+    /// Supplies the current actor pose without giving dropped world items ownership of player or
+    /// ship controllers. The active owner decides inherited inertia and pickup availability.
+    /// </summary>
+    public void AttachWorldItemContext(
+        Func<Vector2> ownerPositionProvider,
+        Func<Vector2> ownerVelocityProvider,
+        Func<bool> pickupActiveProvider)
+    {
+        ArgumentNullException.ThrowIfNull(ownerPositionProvider);
+        ArgumentNullException.ThrowIfNull(ownerVelocityProvider);
+        ArgumentNullException.ThrowIfNull(pickupActiveProvider);
+        _dropOwnerPositionProvider = ownerPositionProvider;
+        _dropOwnerVelocityProvider = ownerVelocityProvider;
+        _dropPickupActiveProvider = pickupActiveProvider;
+        RefreshDroppedItemViews(force: true);
+    }
+
+    /// <summary>
+    /// Atomically releases the complete selected stack. Inventory removal is rolled back into the
+    /// exact original slot if no collision-free spawn pose or world presentation can be created.
+    /// </summary>
+    public bool TryDropInventoryStack(InventorySlotAddress source, Vector2 requestedWorldPosition)
+    {
+        if (!_initialized || !requestedWorldPosition.IsFinite() ||
+            !TryResolveDropSource(source, out var inventory) ||
+            !WorldItemDropTransaction.TryReserveEntireStack(inventory, source.SlotIndex, out var reservation))
+        {
+            return false;
+        }
+
+        string? createdDropId = null;
+        try
+        {
+            var ownerPosition = _dropOwnerPositionProvider?.Invoke() ?? requestedWorldPosition;
+            if (!TryFindSafeDropPosition(ownerPosition, requestedWorldPosition, out var spawnPosition))
+            {
+                if (!WorldItemDropTransaction.Rollback(inventory, reservation))
+                {
+                    throw new InvalidOperationException("A failed world drop could not restore its source slot.");
+                }
+
+                _showMessage("Kein sicherer Platz");
+                return false;
+            }
+
+            var inherited = LimitDroppedItemVelocity(_dropOwnerVelocityProvider?.Invoke() ?? Vector2.Zero);
+            if (inherited.LengthSquared() < 1)
+            {
+                var direction = (requestedWorldPosition - ownerPosition).Normalized();
+                inherited = (direction == Vector2.Zero ? Vector2.Right : direction) *
+                            (float)WorldItemDropConfiguration.StationaryDropImpulse;
+            }
+
+            var id = $"drop-{Guid.NewGuid():N}";
+            createdDropId = id;
+            var angularMagnitude = Mathf.Lerp(
+                (float)WorldItemDropConfiguration.MinimumAngularSpeedRadians,
+                (float)WorldItemDropConfiguration.MaximumAngularSpeedRadians,
+                Mathf.Abs(id.GetHashCode() % 1000) / 999.0f);
+            var state = new DroppedItemStateData(
+                id,
+                reservation.ItemId.Value,
+                reservation.Amount,
+                spawnPosition.X,
+                spawnPosition.Y,
+                0,
+                inherited.X,
+                inherited.Y,
+                id.GetHashCode() % 2 == 0 ? angularMagnitude : -angularMagnitude);
+            _droppedItems.Add(id, state);
+            if (ShouldPresentDroppedItem(state) && !TryCreateDroppedItemView(state))
+            {
+                _droppedItems.Remove(id);
+                if (!WorldItemDropTransaction.Rollback(inventory, reservation))
+                {
+                    throw new InvalidOperationException("A failed world drop could not restore its source slot.");
+                }
+
+                return false;
+            }
+
+            MarkInventoryChanged();
+            return true;
+        }
+        catch
+        {
+            if (createdDropId is not null)
+            {
+                RemoveDroppedItem(createdDropId);
+            }
+
+            if (inventory.GetSlot(source.SlotIndex).IsEmpty)
+            {
+                if (!WorldItemDropTransaction.Rollback(inventory, reservation))
+                {
+                    throw new InvalidOperationException(
+                        "A failed world-drop transaction could not restore its source slot.");
+                }
+            }
+
+            throw;
+        }
     }
 
     private void RepairMissingStarterPowerCables()
@@ -713,6 +1249,11 @@ public partial class FactoryRuntimeController : Node2D
     public void RegisterSector(SectorView sector)
     {
         ArgumentNullException.ThrowIfNull(sector);
+        foreach (var resource in sector.Resources.Where(GodotObject.IsInstanceValid))
+        {
+            _loadedResourceSources[resource.DepositId] = resource;
+        }
+
         foreach (var comet in sector.Comets)
         {
             RegisterComet(comet);
@@ -722,6 +1263,11 @@ public partial class FactoryRuntimeController : Node2D
     public void UnregisterSector(SectorView sector)
     {
         ArgumentNullException.ThrowIfNull(sector);
+        foreach (var resource in sector.Resources)
+        {
+            _loadedResourceSources.Remove(resource.DepositId);
+        }
+
         var persistentStateChanged = false;
         foreach (var comet in sector.Comets)
         {
@@ -770,12 +1316,14 @@ public partial class FactoryRuntimeController : Node2D
 
     public IReadOnlyList<BuildMachineViewModel> CreateBuildMenuViewModels()
     {
-        var machines = _machineCatalog.All
+        var machines = _machineCatalog.DirectBuildMenuEntries
+            .Where(IsMachineUnlocked)
             .OrderBy(machine => machine.Category)
             .ThenBy(machine => machine.DisplayName, StringComparer.CurrentCulture)
             .Select(CreateBuildMachineViewModel)
             .ToArray();
         var connections = _connectionTypes.All
+            .Where(IsConnectionUnlocked)
             .OrderBy(connection => connection.DisplayName, StringComparer.CurrentCulture)
             .Select(CreateConnectionBuildViewModel)
             .ToArray();
@@ -789,11 +1337,13 @@ public partial class FactoryRuntimeController : Node2D
             _connectionTypes.TryGet(connectionPresentation.TypeId, out var connectionType) &&
             connectionType is not null)
         {
-            _placementPreview.Cancel();
-            _connectionPlacementPreview.Cancel();
-            _powerCablePlacementPreview.Cancel();
-            _powerCableSourceTarget = null;
-            _powerCableCandidateTarget = null;
+            if (!IsConnectionUnlocked(connectionType))
+            {
+                _showMessage("Verbindung noch nicht erforscht");
+                return false;
+            }
+
+            CancelPlacement();
             if (connectionType.Kind == ConnectionKind.PowerCable)
             {
                 _powerCablePlacementPreview.Begin(
@@ -813,17 +1363,63 @@ public partial class FactoryRuntimeController : Node2D
             return false;
         }
 
-        if (!IsUnlocked(definition.UnlockRequirement))
+        if (!definition.IsDirectBuildMenuEntry || !IsMachineUnlocked(definition))
         {
             _showMessage("Maschine noch nicht erforscht");
             return false;
         }
 
-        _connectionPlacementPreview.Cancel();
-        _powerCablePlacementPreview.Cancel();
-        _powerCableSourceTarget = null;
-        _powerCableCandidateTarget = null;
-        _placementPreview.Start(id, HasBuildMaterials);
+        CancelPlacement();
+        var presentation = MachinePresentationCatalog.Instance.Get(id);
+        _placementPreview.Start(
+            id,
+            HasBuildMaterials,
+            (float)_placementRotationState.ResolveInitialRotation(presentation.SupportsRotation));
+        return true;
+    }
+
+    public bool StartPlacementFromHotbarSlot(int slotIndex, ItemId itemId)
+    {
+        if (slotIndex < 0 || slotIndex >= _hotbarInventory.SlotCount)
+        {
+            throw new ArgumentOutOfRangeException(nameof(slotIndex));
+        }
+
+        var slot = _hotbarInventory.GetSlot(slotIndex);
+        if (slot.ItemId != itemId || slot.Amount <= 0)
+        {
+            return false;
+        }
+
+        CancelPlacement();
+        if (_machineCatalog.TryGetByPlacementItem(itemId, out var machine) && machine is not null)
+        {
+            _hotbarPlacementSource = new HotbarPlacementSource(slotIndex, itemId);
+            var presentation = MachinePresentationCatalog.Instance.Get(machine.Id);
+            _placementPreview.Start(
+                machine.Id,
+                HasHotbarPlacementItem,
+                (float)_placementRotationState.ResolveInitialRotation(presentation.SupportsRotation));
+            return true;
+        }
+
+        var connection = _connectionTypes.ForBuildItem(itemId).FirstOrDefault();
+        if (connection is null)
+        {
+            return false;
+        }
+
+        _hotbarPlacementSource = new HotbarPlacementSource(slotIndex, itemId);
+        if (connection.Kind == ConnectionKind.PowerCable)
+        {
+            _powerCablePlacementPreview.Begin(
+                (float)PowerGridConfiguration.MaximumCableLengthWorldUnits);
+        }
+        else
+        {
+            _connectionPlacementPreview.Start(connection);
+        }
+
         return true;
     }
 
@@ -834,6 +1430,7 @@ public partial class FactoryRuntimeController : Node2D
         _powerCablePlacementPreview.Cancel();
         _powerCableSourceTarget = null;
         _powerCableCandidateTarget = null;
+        _hotbarPlacementSource = null;
     }
 
     public void RotatePlacement(int direction)
@@ -841,6 +1438,9 @@ public partial class FactoryRuntimeController : Node2D
         if (_placementPreview.IsActive)
         {
             _placementPreview.Rotate(direction);
+            _placementRotationState.Remember(
+                _placementPreview.RelativeRotationRadians,
+                _placementPreview.SupportsRotation);
         }
     }
 
@@ -880,24 +1480,79 @@ public partial class FactoryRuntimeController : Node2D
         }
 
         var definition = _machineCatalog.Get(definitionId);
-        var costs = _firstBasicGenerator.GetEffectiveBuildCosts(definition);
-        if (!ProductionInventoryRules.ContainsAll(_astronautInventory, costs))
+        ResourceDepositView? extractionSource = null;
+        if (definition.PlacementRequirement == MachinePlacementRequirement.ResourceDeposit)
+        {
+            extractionSource = FindResourceSourceForPlacement(comet, placement);
+            if (extractionSource is null)
+            {
+                _showMessage(MachinePlacementPreview.GetReasonText(
+                    MachinePlacementFailureReason.ResourceSourceRequired));
+                return false;
+            }
+
+            if (_machines.Values.Any(machine =>
+                    string.Equals(
+                        machine.ExtractionSource?.SourceId,
+                        extractionSource.DepositId,
+                        StringComparison.Ordinal)))
+            {
+                _showMessage(MachinePlacementPreview.GetReasonText(
+                    MachinePlacementFailureReason.ResourceSourceOccupied));
+                return false;
+            }
+        }
+
+        var costs = GetActivePlacementCosts(definition);
+        if (!HasActivePlacementCosts(costs))
         {
             _showMessage("Materialien fehlen");
             return false;
         }
 
+        var constructionCostsPaid = !_firstBasicGenerator.IsFreeBuildAvailable(definition);
+
         var state = new MachineState(
             new MachineInstanceId($"machine:{Guid.NewGuid():N}"),
             definition,
-            placement);
+            placement,
+            constructionCostsPaid: constructionCostsPaid);
+        if (extractionSource is not null)
+        {
+            state.BindExtractionSource(new ExtractionSourceBinding(
+                extractionSource.DepositId,
+                extractionSource.Deposit.ResourceId,
+                extractionSource.Purity,
+                extractionSource.Deposit.BaseExtractionUnitsPerMinute));
+            var extractionRecipe = _recipeCatalog.ForMachine(definition.Id)
+                .SingleOrDefault(recipe =>
+                    recipe.SourceResourceId == extractionSource.Deposit.ResourceId);
+            if (extractionRecipe is null)
+            {
+                _showMessage("Erzart nicht unterstützt");
+                return false;
+            }
+
+            if (!IsRecipeUnlocked(extractionRecipe))
+            {
+                _showMessage(GetRecipeUnlockMessage(extractionRecipe));
+                return false;
+            }
+
+            if (!state.SelectRecipe(extractionRecipe))
+            {
+                _showMessage("Das Miner-Rezept konnte nicht ausgewählt werden");
+                return false;
+            }
+        }
+
         if (definition.Kind is MachineKind.Generator or MachineKind.Research or
-            MachineKind.Storage or MachineKind.Infrastructure)
+            MachineKind.Storage or MachineKind.Infrastructure || extractionSource is not null)
         {
             state.SetEnabled(true);
         }
 
-        if (!ProductionInventoryRules.TryRemoveAll(_astronautInventory, costs))
+        if (!TryConsumeActivePlacementCosts(costs))
         {
             _showMessage("Materialien konnten nicht abgezogen werden");
             return false;
@@ -920,7 +1575,7 @@ public partial class FactoryRuntimeController : Node2D
             _connectionNetwork.UnregisterMachine(state.InstanceId);
             InvalidatePowerTopology(comet.CometId);
 
-            if (!ProductionInventoryRules.TryAddAll(_astronautInventory, costs))
+            if (!TryRestoreActivePlacementCosts(costs))
             {
                 throw new InvalidOperationException("A failed construction could not restore its build costs.");
             }
@@ -928,13 +1583,416 @@ public partial class FactoryRuntimeController : Node2D
             throw;
         }
 
-        _placementPreview.Cancel();
+        CancelPlacement();
         MarkDirty();
         BuildCatalogChanged?.Invoke();
         FactoryStateChanged?.Invoke();
         _showMessage($"{definition.DisplayName} wird gebaut");
         return true;
     }
+
+    public bool TryBeginDismantlingAtViewportPosition(
+        Vector2 viewportPosition,
+        Vector2 playerWorldPosition,
+        ItemId activeToolItemId)
+    {
+        if (!viewportPosition.IsFinite() || !playerWorldPosition.IsFinite())
+        {
+            throw new ArgumentException("Dismantling coordinates must be finite.");
+        }
+
+        if (!DismantlingRules.IsDismantlingTool(activeToolItemId))
+        {
+            return false;
+        }
+
+        var worldPosition = ViewportToWorld(viewportPosition);
+        var target = ResolveDismantlingTarget(worldPosition);
+        if (target is null)
+        {
+            CancelDismantling();
+            return false;
+        }
+
+        if (playerWorldPosition.DistanceTo(target.WorldPosition) >
+            DismantlingConfiguration.InteractionRangeWorldUnits)
+        {
+            _showMessage("Objekt ist zu weit entfernt");
+            CancelDismantling();
+            return false;
+        }
+
+        if (_dismantlingTarget is { } current && current.StableId == target.StableId)
+        {
+            return true;
+        }
+
+        CancelDismantling();
+        _dismantlingTarget = target;
+        _dismantlingProgress.Begin(target.StableId, target.DurationSeconds);
+        UpdateDismantlingTargetVisual((float)_dismantlingProgress.Progress);
+        return true;
+    }
+
+    /// <summary>
+    /// Advances the held dismantling interaction. Every invalidating condition cancels before
+    /// the atomic removal/refund path is reached.
+    /// </summary>
+    public bool AdvanceDismantling(
+        double deltaSeconds,
+        Vector2 viewportPosition,
+        Vector2 playerWorldPosition,
+        ItemId? activeToolItemId,
+        bool interactionHeld)
+    {
+        if (!IsDismantling)
+        {
+            return false;
+        }
+
+        if (!interactionHeld || activeToolItemId is not { } tool ||
+            !DismantlingRules.IsDismantlingTool(tool) ||
+            !viewportPosition.IsFinite() || !playerWorldPosition.IsFinite())
+        {
+            CancelDismantling();
+            return false;
+        }
+
+        var hoveredTarget = ResolveDismantlingTarget(ViewportToWorld(viewportPosition));
+        if (hoveredTarget is null || _dismantlingTarget is not { } target ||
+            !string.Equals(hoveredTarget.StableId, target.StableId, StringComparison.Ordinal) ||
+            !TryGetDismantlingTargetWorldPosition(out var currentTargetPosition) ||
+            playerWorldPosition.DistanceTo(currentTargetPosition) >
+            DismantlingConfiguration.InteractionRangeWorldUnits)
+        {
+            CancelDismantling();
+            return false;
+        }
+
+        var completed = _dismantlingProgress.Advance(deltaSeconds);
+        UpdateDismantlingTargetVisual((float)_dismantlingProgress.Progress);
+        if (!completed)
+        {
+            return false;
+        }
+
+        var completedTarget = target;
+        CancelDismantling();
+        if (completedTarget.MachineId is { } machineId &&
+            _machineViews.TryGetValue(machineId, out var machineView) &&
+            GodotObject.IsInstanceValid(machineView))
+        {
+            return TryDismantleMachine(machineView);
+        }
+
+        if (completedTarget.ConnectionId is { } connectionId)
+        {
+            var connection = _connectionNetwork.Connections
+                .FirstOrDefault(item => item.Id == connectionId);
+            return connection is not null && TryDismantleConnection(connection);
+        }
+
+        return false;
+    }
+
+    public void CancelDismantling()
+    {
+        UpdateDismantlingTargetVisual(0);
+        _dismantlingTarget = null;
+        _dismantlingProgress.Cancel();
+    }
+
+    private Vector2 ViewportToWorld(Vector2 viewportPosition) =>
+        GetViewport().GetCanvasTransform().AffineInverse() * viewportPosition;
+
+    private DismantlingTarget? ResolveDismantlingTarget(Vector2 worldPosition)
+    {
+        var connection = FindDismantlingConnection(worldPosition);
+        if (connection is not null)
+        {
+            return new DismantlingTarget(
+                $"connection:{connection.Id.Value}",
+                null,
+                connection.Id,
+                worldPosition,
+                DismantlingConfiguration.ConnectionDismantlingDurationSeconds);
+        }
+
+        var machineView = _machineViews.Values
+            .Where(view => GodotObject.IsInstanceValid(view) && view.ContainsWorldPoint(worldPosition))
+            .OrderBy(view => view.GlobalPosition.DistanceSquaredTo(worldPosition))
+            .FirstOrDefault();
+        return machineView is null
+            ? null
+            : new DismantlingTarget(
+                $"machine:{machineView.InstanceId.Value}",
+                machineView.InstanceId,
+                null,
+                machineView.GlobalPosition,
+                DismantlingConfiguration.MachineDismantlingDurationSeconds);
+    }
+
+    private bool TryGetDismantlingTargetWorldPosition(out Vector2 worldPosition)
+    {
+        worldPosition = default;
+        if (_dismantlingTarget is not { } target)
+        {
+            return false;
+        }
+
+        if (target.MachineId is { } machineId)
+        {
+            if (!_machineViews.TryGetValue(machineId, out var view) ||
+                !GodotObject.IsInstanceValid(view))
+            {
+                return false;
+            }
+
+            worldPosition = view.GlobalPosition;
+            return true;
+        }
+
+        if (target.ConnectionId is { } connectionId &&
+            _connectionNetwork.Connections.Any(item => item.Id == connectionId))
+        {
+            worldPosition = target.WorldPosition;
+            return true;
+        }
+
+        return false;
+    }
+
+    private void UpdateDismantlingTargetVisual(float progress)
+    {
+        if (_dismantlingTarget?.MachineId is { } machineId &&
+            _machineViews.TryGetValue(machineId, out var machineView) &&
+            GodotObject.IsInstanceValid(machineView))
+        {
+            machineView.SetDismantlingProgress(progress);
+            return;
+        }
+
+        if (_dismantlingTarget?.ConnectionId is not { } connectionId)
+        {
+            return;
+        }
+
+        if (_connectionViews.TryGetValue(connectionId, out var connectionView) &&
+            GodotObject.IsInstanceValid(connectionView))
+        {
+            connectionView.SetDismantlingProgress(progress);
+        }
+
+        if (_powerCableViews.TryGetValue(connectionId, out var powerCableView) &&
+            GodotObject.IsInstanceValid(powerCableView))
+        {
+            powerCableView.SetDismantlingProgress(progress);
+        }
+    }
+
+    private MachineConnection? FindDismantlingConnection(Vector2 worldPosition)
+    {
+        var regular = _connectionViews
+            .Where(pair => GodotObject.IsInstanceValid(pair.Value))
+            .Select(pair => new
+            {
+                pair.Key,
+                Distance = pair.Value.DistanceToWorldPoint(worldPosition),
+            });
+        var power = _powerCableViews
+            .Where(pair => GodotObject.IsInstanceValid(pair.Value))
+            .Select(pair => new
+            {
+                pair.Key,
+                Distance = pair.Value.DistanceToWorldPoint(worldPosition),
+            });
+        var candidate = regular.Concat(power)
+            .Where(item => item.Distance <= DismantlingConfiguration.ConnectionSelectionRadiusWorldUnits)
+            .OrderBy(item => item.Distance)
+            .FirstOrDefault();
+        return candidate is null
+            ? null
+            : _connectionNetwork.Connections.FirstOrDefault(item => item.Id == candidate.Key);
+    }
+
+    private bool TryDismantleConnection(MachineConnection connection)
+    {
+        var result = DismantlingRules.TryDismantleConnection(
+            ProductionItemIds.MachineDismantlingTool,
+            _astronautInventory,
+            connection.Kind,
+            () =>
+            {
+                if (!_connectionNetwork.RemoveConnection(connection.Id))
+                {
+                    return false;
+                }
+
+                RemoveConnectionView(connection.Id);
+                var cometId = GetEndpointCometId(connection.Source) ?? GetEndpointCometId(connection.Target);
+                if (cometId is not null)
+                {
+                    InvalidatePowerTopology(cometId);
+                }
+
+                return true;
+            },
+            _connectionTypes);
+        return FinishDismantling(result, "Verbindung abgebaut");
+    }
+
+    private bool TryDismantleMachine(MachineView view)
+    {
+        if (!_machines.TryGetValue(view.InstanceId, out var machine))
+        {
+            return false;
+        }
+
+        var connections = _connectionNetwork.GetConnectionsForMachine(machine.InstanceId).ToArray();
+        IReadOnlyList<ItemAmount> inFlightInputs = machine.IsBatchInProgress &&
+                                                   machine.SelectedRecipeId is { } selectedRecipeId
+            ? _recipeCatalog.Get(selectedRecipeId).Inputs
+            : [];
+        var additionalRecovery = machine.InputInventory.Slots
+            .Concat(machine.OutputInventory.Slots)
+            .Where(slot => !slot.IsEmpty)
+            .Select(slot => new ItemAmount(slot.ItemId!.Value, slot.Amount))
+            .Concat(inFlightInputs)
+            .Concat(connections.SelectMany(connection =>
+                DismantlingRules.GetConnectionRecovery(connection.Kind, _connectionTypes)))
+            .ToArray();
+        var result = DismantlingRules.TryDismantleMachine(
+            ProductionItemIds.MachineDismantlingTool,
+            _astronautInventory,
+            machine.Definition,
+            () => RemoveMachineForDismantling(machine, view, connections),
+            additionalRecovery,
+            machine.ConstructionCostsPaid);
+        return FinishDismantling(result, $"{machine.Definition.DisplayName} abgebaut");
+    }
+
+    private bool RemoveMachineForDismantling(
+        MachineState machine,
+        MachineView view,
+        IReadOnlyList<MachineConnection> connections)
+    {
+        foreach (var connection in connections)
+        {
+            _connectionNetwork.RemoveConnection(connection.Id);
+            RemoveConnectionView(connection.Id);
+        }
+
+        view.InteractionRequested -= HandleMachineInteractionRequested;
+        _machineViews.Remove(machine.InstanceId);
+        view.QueueFree();
+        _connectionNetwork.UnregisterMachine(machine.InstanceId);
+        _machines.Remove(machine.InstanceId);
+        RemoveIndexedMachine(machine);
+        _lastAvailablePowerByMachine.Remove(machine.InstanceId);
+        _pendingResearch.Remove(machine.InstanceId);
+        if (_activeResearchStation == machine.InstanceId)
+        {
+            _activeResearchStation = null;
+            _research.SetEnabled(false);
+        }
+
+        if (machine.Placement?.CometId is { } cometId)
+        {
+            _lastSimulatedUtc[cometId] = DateTimeOffset.UtcNow;
+            InvalidatePowerTopology(cometId);
+        }
+
+        return true;
+    }
+
+    private bool FinishDismantling(DismantlingResult result, string successMessage)
+    {
+        if (!result.Succeeded)
+        {
+            _showMessage(result.Failure == DismantlingFailure.InventoryFull
+                ? "Inventar voll – Objekt wurde nicht abgebaut"
+                : "Objekt konnte nicht abgebaut werden");
+            return false;
+        }
+
+        MarkDirty();
+        BuildCatalogChanged?.Invoke();
+        FactoryStateChanged?.Invoke();
+        _showMessage(successMessage);
+        return true;
+    }
+
+    private ResourceDepositView? FindResourceSourceForPlacement(
+        AsteroidView comet,
+        MachinePlacement placement) =>
+        _loadedResourceSources.Values
+            .Where(resource => GodotObject.IsInstanceValid(resource) &&
+                               resource.GetParent() == comet &&
+                               resource.IsInfinite)
+            .OrderBy(resource => resource.Position.DistanceSquaredTo(new Vector2(
+                (float)placement.RelativePositionX,
+                (float)placement.RelativePositionY)))
+            .FirstOrDefault(resource => resource.Position.DistanceTo(new Vector2(
+                (float)placement.RelativePositionX,
+                (float)placement.RelativePositionY)) <= 1f);
+
+    private IReadOnlyList<RadiationSource> CreateLoadedRadiationSources()
+    {
+        var itemCatalog = DefaultProductionItemCatalog.Instance;
+        var sources = new List<RadiationSource>();
+        foreach (var (machineId, view) in _machineViews)
+        {
+            if (!GodotObject.IsInstanceValid(view) || !_machines.TryGetValue(machineId, out var machine))
+            {
+                continue;
+            }
+
+            var strength = GetInventoryRadiationStrength(machine.InputInventory, itemCatalog) +
+                           GetInventoryRadiationStrength(machine.OutputInventory, itemCatalog);
+            if (strength <= 0)
+            {
+                continue;
+            }
+
+            sources.Add(new RadiationSource(
+                machine.InstanceId.Value,
+                view.GlobalPosition.X,
+                view.GlobalPosition.Y,
+                strength,
+                machine.Definition.RadiationShielding));
+        }
+
+        foreach (var resource in _loadedResourceSources.Values.Where(GodotObject.IsInstanceValid))
+        {
+            if (!itemCatalog.TryGet(resource.Deposit.ResourceId, out var item) || item is null ||
+                item.HazardKind != ItemHazardKind.Radioactive)
+            {
+                continue;
+            }
+
+            sources.Add(new RadiationSource(
+                resource.DepositId,
+                resource.GlobalPosition.X,
+                resource.GlobalPosition.Y,
+                item.HazardStrength * RadiationConfiguration.ResourceSourceStrengthScale));
+        }
+
+        return sources;
+    }
+
+    private static double GetInventoryRadiationStrength(
+        SlotInventory inventory,
+        ProductionItemCatalog itemCatalog) => inventory.Slots
+        .Where(slot => !slot.IsEmpty &&
+                       itemCatalog.TryGet(slot.ItemId!.Value, out var item) &&
+                       item?.HazardKind == ItemHazardKind.Radioactive)
+        .Sum(slot =>
+        {
+            var item = itemCatalog.Get(slot.ItemId!.Value);
+            return item.HazardStrength *
+                   (slot.Amount / 50.0) *
+                   RadiationConfiguration.StoredItemStrengthScale;
+        });
 
     private bool TryAdvanceConnectionPlacement()
     {
@@ -944,7 +2002,7 @@ public partial class FactoryRuntimeController : Node2D
             return false;
         }
 
-        if (_astronautInventory.GetAmount(type.RequiredBuildItemId) < 1)
+        if (!HasActivePlacementItem(type.RequiredBuildItemId))
         {
             var missingItem = _itemPresentation.GetOrCreateFallback(
                 type.RequiredBuildItemId,
@@ -956,64 +2014,34 @@ public partial class FactoryRuntimeController : Node2D
         }
 
         var worldPosition = GetGlobalMousePosition();
-        var selectedView = FindNearestConnectionMachine(worldPosition);
-        if (selectedView is null)
+        var evaluation = EvaluateConnectionPlacement(worldPosition);
+        if (!evaluation.Succeeded)
         {
-            const string message = "Keine Maschine am Verbindungspunkt";
-            _connectionPlacementPreview.SetFailure(message);
-            _showMessage(message);
+            _connectionPlacementPreview.SetFailure(evaluation.FailureMessage);
+            _showMessage(evaluation.FailureMessage);
             return false;
         }
 
-        var selectedState = _machines[selectedView.InstanceId];
-        if (_connectionPlacementPreview.Source is not { } sourceView)
+        type = evaluation.Type!;
+        if (_connectionPlacementPreview.Source is null)
         {
-            var sourcePort = FindConnectionPort(selectedState, type, source: true);
-            if (sourcePort is null)
+            if (_connectionPlacementPreview.SelectedType?.Id != type.Id)
             {
-                var message = type.IsDirectional
-                    ? "Diese Maschine besitzt keinen passenden Ausgang"
-                    : "Diese Maschine besitzt keinen passenden Anschluss";
-                _connectionPlacementPreview.SetFailure(message);
-                _showMessage(message);
-                return false;
+                _connectionPlacementPreview.Start(type);
             }
 
-            _connectionPlacementPreview.SetSource(selectedView);
+            _connectionPlacementPreview.SetSource(evaluation.SourceView!);
             _showMessage("Quelle gewählt – jetzt Zielmaschine anklicken");
             return true;
         }
 
-        var sourceState = _machines[sourceView.InstanceId];
-        var sourceConnectionPort = FindConnectionPort(sourceState, type, source: true);
-        var targetConnectionPort = FindConnectionPort(selectedState, type, source: false);
-        if (sourceConnectionPort is null || targetConnectionPort is null)
-        {
-            var message = type.IsDirectional
-                ? "Ausgang und Eingang sind nicht kompatibel"
-                : "Die Anschlüsse sind nicht kompatibel";
-            _connectionPlacementPreview.SetFailure(message);
-            _showMessage(message);
-            return false;
-        }
-
-        var sourceAnchor = sourceView.GetWorldConnectionAnchor(
-            ConnectionPresentationCatalog.GetSourceAnchor(type.Kind));
-        var targetAnchor = selectedView.GetWorldConnectionAnchor(
-            ConnectionPresentationCatalog.GetTargetAnchor(type.Kind));
-        if (sourceAnchor.DistanceTo(targetAnchor) > ConnectionPresentationCatalog.MaximumConnectionLength)
-        {
-            const string message = "Verbindung ist zu lang";
-            _connectionPlacementPreview.SetFailure(message);
-            _showMessage(message);
-            return false;
-        }
-
+        var sourceState = _machines[evaluation.SourceView!.InstanceId];
+        var selectedState = _machines[evaluation.TargetView!.InstanceId];
         var result = _connectionNetwork.TryConnect(
             new MachineConnectionId($"connection:{Guid.NewGuid():N}"),
             type.Id,
-            new MachineConnectionEndpoint(sourceState.InstanceId, sourceConnectionPort.Id),
-            new MachineConnectionEndpoint(selectedState.InstanceId, targetConnectionPort.Id));
+            new MachineConnectionEndpoint(sourceState.InstanceId, evaluation.SourcePort!.Id),
+            new MachineConnectionEndpoint(selectedState.InstanceId, evaluation.TargetPort!.Id));
         if (!result.Succeeded || result.Connection is null)
         {
             var message = GetConnectionFailureText(result.Failure);
@@ -1022,7 +2050,7 @@ public partial class FactoryRuntimeController : Node2D
             return false;
         }
 
-        if (!_astronautInventory.Remove(type.RequiredBuildItemId, 1).Succeeded)
+        if (!TryConsumeActivePlacementItem(type.RequiredBuildItemId))
         {
             _connectionNetwork.RemoveConnection(result.Connection.Id);
             _showMessage("Verbindungselement konnte nicht entnommen werden");
@@ -1039,7 +2067,7 @@ public partial class FactoryRuntimeController : Node2D
         catch
         {
             _connectionNetwork.RemoveConnection(result.Connection.Id);
-            if (!_astronautInventory.Add(type.RequiredBuildItemId, 1).Succeeded)
+            if (!TryRestoreActivePlacementItem(type.RequiredBuildItemId))
             {
                 throw new InvalidOperationException("A failed connection could not restore its build item.");
             }
@@ -1047,12 +2075,133 @@ public partial class FactoryRuntimeController : Node2D
             throw;
         }
 
-        _connectionPlacementPreview.Cancel();
+        CancelPlacement();
         MarkDirty();
         BuildCatalogChanged?.Invoke();
         FactoryStateChanged?.Invoke();
         _showMessage($"{type.DisplayName} verbunden");
         return true;
+    }
+
+    private void RefreshConnectionPlacementCandidate()
+    {
+        var evaluation = EvaluateConnectionPlacement(GetGlobalMousePosition());
+        _connectionPlacementPreview.SetCandidateState(
+            evaluation.Succeeded,
+            evaluation.FailureMessage);
+    }
+
+    private ConnectionPlacementEvaluation EvaluateConnectionPlacement(Vector2 worldPosition)
+    {
+        var type = _connectionPlacementPreview.SelectedType;
+        if (type is null)
+        {
+            return ConnectionPlacementEvaluation.Failed("Platzierung nicht aktiv");
+        }
+
+        var selectedView = FindNearestConnectionMachine(worldPosition);
+        if (selectedView is null)
+        {
+            if (_connectionPlacementPreview.Source is { } source &&
+                source.GetWorldConnectionAnchor(ConnectionPresentationCatalog.GetSourceAnchor(type.Kind))
+                    .DistanceTo(worldPosition) > ConnectionPresentationCatalog.MaximumConnectionLength)
+            {
+                return ConnectionPlacementEvaluation.Failed("Kabel zu lang");
+            }
+
+            return ConnectionPlacementEvaluation.Failed("Kein freier Anschluss");
+        }
+
+        var selectedState = _machines[selectedView.InstanceId];
+        if (_connectionPlacementPreview.Source is not { } sourceView)
+        {
+            type = ResolveHotbarConnectionType(selectedState, type);
+            var sourcePort = FindConnectionPort(selectedState, type, source: true);
+            if (sourcePort is null)
+            {
+                return ConnectionPlacementEvaluation.Failed("Kein freier Anschluss");
+            }
+
+            var sourceEndpoint = new MachineConnectionEndpoint(selectedState.InstanceId, sourcePort.Id);
+            if (_connectionNetwork.Connections.Count(connection =>
+                    connection.Source == sourceEndpoint || connection.Target == sourceEndpoint) >=
+                sourcePort.MaximumConnections)
+            {
+                return ConnectionPlacementEvaluation.Failed("Anschluss belegt");
+            }
+
+            return ConnectionPlacementEvaluation.ForSource(type, selectedView, sourcePort);
+        }
+
+        var sourceState = _machines[sourceView.InstanceId];
+        var sourceConnectionPort = FindConnectionPort(sourceState, type, source: true);
+        var targetConnectionPort = FindConnectionPort(selectedState, type, source: false);
+        if (sourceConnectionPort is null || targetConnectionPort is null)
+        {
+            return ConnectionPlacementEvaluation.Failed("Falscher Anschlusstyp");
+        }
+
+        var sourceAnchor = sourceView.GetWorldConnectionAnchor(
+            ConnectionPresentationCatalog.GetSourceAnchor(type.Kind));
+        var targetAnchor = selectedView.GetWorldConnectionAnchor(
+            ConnectionPresentationCatalog.GetTargetAnchor(type.Kind));
+        if (sourceAnchor.DistanceTo(targetAnchor) > ConnectionPresentationCatalog.MaximumConnectionLength)
+        {
+            return ConnectionPlacementEvaluation.Failed("Kabel zu lang");
+        }
+
+        var validation = _connectionNetwork.ValidateConnection(
+            type.Id,
+            new MachineConnectionEndpoint(sourceState.InstanceId, sourceConnectionPort.Id),
+            new MachineConnectionEndpoint(selectedState.InstanceId, targetConnectionPort.Id));
+        return validation == MachineConnectionFailure.None
+            ? ConnectionPlacementEvaluation.ForTarget(
+                type,
+                sourceView,
+                selectedView,
+                sourceConnectionPort,
+                targetConnectionPort)
+            : ConnectionPlacementEvaluation.Failed(GetConnectionFailureText(validation));
+    }
+
+    private ConnectionTypeDefinition ResolveHotbarConnectionType(
+        MachineState sourceMachine,
+        ConnectionTypeDefinition currentType)
+    {
+        if (_hotbarPlacementSource is not { } hotbarSource)
+        {
+            return currentType;
+        }
+
+        var compatibleTypes = _connectionTypes.ForBuildItem(hotbarSource.ItemId)
+            .Where(type => FindConnectionPort(sourceMachine, type, source: true) is not null)
+            .ToArray();
+        if (compatibleTypes.Length <= 1)
+        {
+            return compatibleTypes.FirstOrDefault() ?? currentType;
+        }
+
+        if (sourceMachine.SelectedRecipeId is { } selectedRecipeId &&
+            _recipeCatalog.TryGet(selectedRecipeId, out var selectedRecipe) && selectedRecipe is not null)
+        {
+            var outputMedia = selectedRecipe.CombinedOutputs
+                .Select(output => DefaultProductionItemCatalog.Instance.Get(output.ItemId).Phase)
+                .Select(phase => phase switch
+                {
+                    ProductionItemPhase.Solid => TransportMedium.Solid,
+                    ProductionItemPhase.Liquid => TransportMedium.Liquid,
+                    ProductionItemPhase.Gas => TransportMedium.Gas,
+                    _ => throw new ArgumentOutOfRangeException(nameof(phase)),
+                })
+                .ToHashSet();
+            var recipeType = compatibleTypes.FirstOrDefault(type => outputMedia.Contains(type.Medium));
+            if (recipeType is not null)
+            {
+                return recipeType;
+            }
+        }
+
+        return compatibleTypes.FirstOrDefault(type => type.Id == currentType.Id) ?? compatibleTypes[0];
     }
 
     private bool TryAdvancePowerCablePlacement() =>
@@ -1063,7 +2212,7 @@ public partial class FactoryRuntimeController : Node2D
         RefreshPowerCablePlacementCandidate(worldPosition);
         if (_powerCableCandidateTarget is not { } selected)
         {
-            const string message = "Kein Stromanschluss am Verbindungspunkt";
+            var message = GetMissingPowerCableCandidateFailure(worldPosition);
             _powerCablePlacementPreview.SetFailure(message);
             _showMessage(message);
             return false;
@@ -1072,10 +2221,23 @@ public partial class FactoryRuntimeController : Node2D
         return TryAdvancePowerCablePlacement(selected);
     }
 
+    private string GetMissingPowerCableCandidateFailure(Vector2 worldPosition)
+    {
+        if (_powerCableSourceTarget is { } sourceTarget &&
+            TryResolvePowerEndpoint(sourceTarget, out var source) &&
+            source.WorldPosition.DistanceTo(worldPosition) >
+            PowerGridConfiguration.MaximumCableLengthWorldUnits)
+        {
+            return "Kabel zu lang";
+        }
+
+        return "Kein freier Anschluss";
+    }
+
     private bool TryAdvancePowerCablePlacement(PowerInteractionTarget selected)
     {
         var type = _connectionTypes.Get(ConnectionKind.PowerCable);
-        if (_astronautInventory.GetAmount(type.RequiredBuildItemId) < 1)
+        if (!HasActivePlacementItem(type.RequiredBuildItemId))
         {
             const string message = "Stromkabel fehlt";
             _powerCablePlacementPreview.SetFailure(message);
@@ -1085,7 +2247,7 @@ public partial class FactoryRuntimeController : Node2D
 
         if (!TryResolvePowerEndpoint(selected, out var selectedEndpoint))
         {
-            const string message = "Kein Stromanschluss am Verbindungspunkt";
+            const string message = "Kein freier Anschluss";
             _powerCablePlacementPreview.SetFailure(message);
             _showMessage(message);
             return false;
@@ -1093,7 +2255,7 @@ public partial class FactoryRuntimeController : Node2D
 
         if (IsPowerEndpointOccupied(selected))
         {
-            const string message = "Anschluss ist bereits belegt";
+            const string message = "Anschluss belegt";
             _powerCablePlacementPreview.SetFailure(message);
             _showMessage(message);
             return false;
@@ -1116,7 +2278,7 @@ public partial class FactoryRuntimeController : Node2D
 
         if (sourceTarget == selected)
         {
-            const string message = "Zweiter Anschluss muss verschieden sein";
+            const string message = "Anschluss belegt";
             _powerCablePlacementPreview.SetFailure(message);
             _showMessage(message);
             return false;
@@ -1125,7 +2287,7 @@ public partial class FactoryRuntimeController : Node2D
         if (sourceEndpoint.WorldPosition.DistanceTo(selectedEndpoint.WorldPosition) >
             PowerGridConfiguration.MaximumCableLengthWorldUnits)
         {
-            const string message = "Stromkabel ist zu lang";
+            const string message = "Kabel zu lang";
             _powerCablePlacementPreview.SetFailure(message);
             _showMessage(message);
             return false;
@@ -1144,7 +2306,7 @@ public partial class FactoryRuntimeController : Node2D
             return false;
         }
 
-        if (!_astronautInventory.Remove(type.RequiredBuildItemId, 1).Succeeded)
+        if (!TryConsumeActivePlacementItem(type.RequiredBuildItemId))
         {
             _connectionNetwork.RemoveConnection(result.Connection.Id);
             _showMessage("Stromkabel konnte nicht entnommen werden");
@@ -1159,7 +2321,7 @@ public partial class FactoryRuntimeController : Node2D
         catch
         {
             _connectionNetwork.RemoveConnection(result.Connection.Id);
-            if (!_astronautInventory.Add(type.RequiredBuildItemId, 1).Succeeded)
+            if (!TryRestoreActivePlacementItem(type.RequiredBuildItemId))
             {
                 throw new InvalidOperationException("A failed power cable could not restore its build item.");
             }
@@ -1167,9 +2329,7 @@ public partial class FactoryRuntimeController : Node2D
             throw;
         }
 
-        _powerCablePlacementPreview.Cancel();
-        _powerCableSourceTarget = null;
-        _powerCableCandidateTarget = null;
+        CancelPlacement();
         UpdateShipPowerPortVisuals();
         MarkDirty();
         BuildCatalogChanged?.Invoke();
@@ -1206,21 +2366,37 @@ public partial class FactoryRuntimeController : Node2D
             return;
         }
 
-        var compatible = candidate is not null &&
-                         candidate.Value.Target != _powerCableSourceTarget.Value &&
-                         !IsPowerEndpointOccupied(candidate.Value.Target) &&
-                         TryResolvePowerEndpoint(_powerCableSourceTarget.Value, out var source) &&
-                         string.Equals(source.CometId, candidate.Value.CometId, StringComparison.Ordinal) &&
-                         source.WorldPosition.DistanceTo(candidate.Value.WorldPosition) <=
-                         PowerGridConfiguration.MaximumCableLengthWorldUnits;
+        var failure = GetPowerCableCandidateFailure(candidate);
+        var compatible = candidate is not null && string.IsNullOrEmpty(failure);
         _powerCablePlacementPreview.SetCandidate(
             candidate?.Visual,
             compatible,
-            candidate is null
-                ? string.Empty
-                : IsPowerEndpointOccupied(candidate.Value.Target)
-                    ? "Anschluss ist bereits belegt"
-                    : "Anschluss nicht kompatibel");
+            failure);
+    }
+
+    private string GetPowerCableCandidateFailure(PowerEndpointCandidate? candidate)
+    {
+        if (candidate is null || _powerCableSourceTarget is null)
+        {
+            return string.Empty;
+        }
+
+        if (candidate.Value.Target == _powerCableSourceTarget.Value ||
+            IsPowerEndpointOccupied(candidate.Value.Target))
+        {
+            return "Anschluss belegt";
+        }
+
+        if (!TryResolvePowerEndpoint(_powerCableSourceTarget.Value, out var source) ||
+            !string.Equals(source.CometId, candidate.Value.CometId, StringComparison.Ordinal))
+        {
+            return "Falscher Anschlusstyp";
+        }
+
+        return source.WorldPosition.DistanceTo(candidate.Value.WorldPosition) >
+               PowerGridConfiguration.MaximumCableLengthWorldUnits
+            ? "Kabel zu lang"
+            : string.Empty;
     }
 
     private MachineView? FindNearestConnectionMachine(Vector2 worldPosition)
@@ -1253,12 +2429,15 @@ public partial class FactoryRuntimeController : Node2D
     public PowerInteractionTarget? FindNearestPowerInteraction(Vector2 worldPosition) =>
         FindClosestPowerEndpoint(
             worldPosition,
-            (float)PowerGridConfiguration.PortInteractionRadiusWorldUnits)?.Target;
+            (float)PowerGridConfiguration.PortInteractionRadiusWorldUnits,
+            GetPowerEndpointCandidates()
+                .Where(candidate => CanOpenPowerOverviewAt(candidate.Target))
+                .ToArray())?.Target;
 
     public double GetPowerInteractionDistanceSquared(
         PowerInteractionTarget target,
         Vector2 worldPosition) =>
-        TryResolvePowerEndpoint(target, out var endpoint)
+        CanOpenPowerOverviewAt(target) && TryResolvePowerEndpoint(target, out var endpoint)
             ? endpoint.WorldPosition.DistanceSquaredTo(worldPosition)
             : double.PositiveInfinity;
 
@@ -1400,16 +2579,31 @@ public partial class FactoryRuntimeController : Node2D
             connection.Source == new MachineConnectionEndpoint(target.NodeId, target.PortId) ||
             connection.Target == new MachineConnectionEndpoint(target.NodeId, target.PortId));
 
+    private bool CanOpenPowerOverviewAt(PowerInteractionTarget target)
+    {
+        if (target.NodeId == PlayerShipNodeId)
+        {
+            return _shipPowerNode is not null && _ship is { IsAttached: true } &&
+                   (target.PortId == MachinePortIds.ShipPowerA ||
+                    target.PortId == MachinePortIds.ShipPowerB);
+        }
+
+        return _machines.TryGetValue(target.NodeId, out var machine) &&
+               PowerOverviewAccessRules.CanOpenAt(machine.Definition) &&
+               GetMachinePowerPorts(machine).Any(port => port.Id == target.PortId);
+    }
+
     private static string GetConnectionFailureText(MachineConnectionFailure failure) => failure switch
     {
-        MachineConnectionFailure.SameMachine => "Eine Maschine kann nicht mit sich selbst verbunden werden",
-        MachineConnectionFailure.DifferentComets => "Verbindungen sind nur auf demselben Kometen möglich",
+        MachineConnectionFailure.SameMachine => "Anschluss belegt",
+        MachineConnectionFailure.DifferentComets => "Kabel zu lang",
         MachineConnectionFailure.PortMediumMismatch => "Falscher Anschlusstyp",
-        MachineConnectionFailure.DirectionMismatch => "Erst Ausgang, dann Eingang auswählen",
-        MachineConnectionFailure.PortCapacityReached => "Anschluss ist bereits belegt",
-        MachineConnectionFailure.DuplicateEndpoints => "Diese Maschinen sind bereits so verbunden",
-        MachineConnectionFailure.UnknownPort => "Maschine besitzt keinen passenden Anschluss",
-        _ => "Verbindung kann hier nicht erstellt werden",
+        MachineConnectionFailure.ItemCompatibilityMismatch => "Falscher Anschlusstyp",
+        MachineConnectionFailure.DirectionMismatch => "Falscher Anschlusstyp",
+        MachineConnectionFailure.PortCapacityReached => "Anschluss belegt",
+        MachineConnectionFailure.DuplicateEndpoints => "Anschluss belegt",
+        MachineConnectionFailure.UnknownPort => "Kein freier Anschluss",
+        _ => "Objekt blockiert",
     };
 
     public MachineState? FindNearestInteractiveMachine(Vector2 worldPosition)
@@ -1424,7 +2618,7 @@ public partial class FactoryRuntimeController : Node2D
             }
 
             if (_machines.TryGetValue(view.InstanceId, out var interactionState) &&
-                interactionState.Definition.Id == MachineDefinitionIds.PowerPole)
+                PowerOverviewAccessRules.CanOpenAt(interactionState.Definition))
             {
                 continue;
             }
@@ -1449,9 +2643,10 @@ public partial class FactoryRuntimeController : Node2D
 
     public void OpenPowerTarget(PowerInteractionTarget target)
     {
-        if (!TryResolvePowerEndpoint(target, out _))
+        if (!CanOpenPowerOverviewAt(target) || !TryResolvePowerEndpoint(target, out _))
         {
-            throw new InvalidOperationException("The selected power endpoint is no longer available.");
+            throw new InvalidOperationException(
+                "The selected endpoint is not an available central power overview access point.");
         }
 
         _openPowerTarget = target;
@@ -1460,6 +2655,7 @@ public partial class FactoryRuntimeController : Node2D
     public PowerMenuViewModel? RefreshOpenPowerViewModel()
     {
         if (_openPowerTarget is not { } target ||
+            !CanOpenPowerOverviewAt(target) ||
             !TryResolvePowerEndpoint(target, out var endpoint) ||
             FindPowerComponent(endpoint.CometId, target) is null)
         {
@@ -1875,6 +3071,11 @@ public partial class FactoryRuntimeController : Node2D
     public MachinePanelViewModel CreateMachinePanelViewModel(MachineState state)
     {
         _openMachine = state;
+        if (state.Definition.Id == MachineDefinitionIds.BatteryBank)
+        {
+            return CreateBatteryPanelViewModel(state);
+        }
+
         return state.Definition.Kind switch
         {
             MachineKind.Research => CreateResearchPanelViewModel(state),
@@ -1912,7 +3113,7 @@ public partial class FactoryRuntimeController : Node2D
         }
 
         if (!_recipeCatalog.TryGet(new RecipeId(recipeId), out var recipe) || recipe is null ||
-            recipe.MachineId != _openMachine.Definition.Id || !IsUnlocked(recipe.UnlockRequirement))
+            recipe.MachineId != _openMachine.Definition.Id || !IsRecipeUnlocked(recipe))
         {
             return;
         }
@@ -1955,11 +3156,66 @@ public partial class FactoryRuntimeController : Node2D
         MachineInventoryTransferResult result;
         switch (_openMachine.Definition.Kind)
         {
+            case MachineKind.Production when
+                _openMachine.Definition.Id == MachineDefinitionIds.MobileMiner:
+                var batteryAmount = Math.Min(
+                    _astronautInventory.GetAmount(ProductionItemIds.MobileBatteryPack),
+                    ProductionInventoryRules.GetAvailableCapacity(
+                        _openMachine.InputInventory,
+                        ProductionItemIds.MobileBatteryPack));
+                result = batteryAmount <= 0
+                    ? MachineInventoryTransferResult.Failed(
+                        MachineInventoryTransferFailure.NothingToTransfer)
+                    : MachineInventoryTransfer.TransferExact(
+                        _astronautInventory,
+                        _openMachine.InputInventory,
+                        [new ItemAmount(
+                            ProductionItemIds.MobileBatteryPack,
+                            batteryAmount)]);
+                break;
             case MachineKind.Production when _openMachine.SelectedRecipeId is { } recipeId:
                 result = MachineInventoryTransfer.LoadRecipeInputs(
                     _astronautInventory,
                     _openMachine.InputInventory,
                     _recipeCatalog.Get(recipeId));
+                break;
+            case MachineKind.Generator when
+                _openMachine.Definition.Id == MachineDefinitionIds.FuelGenerator:
+                var filledFuelId = _openMachine.Definition.GeneratorFuelItemId!.Value;
+                var emptyFuelId = _openMachine.Definition.GeneratorReturnedContainerItemId!.Value;
+                var transferSlot = _openMachine.InputInventory.GetSlot(
+                    ProductionConfiguration.FuelGeneratorTankTransferSlotIndex);
+                if (!transferSlot.IsEmpty)
+                {
+                    result = MachineInventoryTransferResult.Failed(
+                        MachineInventoryTransferFailure.TargetFull);
+                    break;
+                }
+
+                var containerToLoad = _astronautInventory.GetAmount(filledFuelId) > 0
+                    ? filledFuelId
+                    : _astronautInventory.GetAmount(emptyFuelId) > 0
+                        ? emptyFuelId
+                        : (ItemId?)null;
+                if (containerToLoad is null)
+                {
+                    result = MachineInventoryTransferResult.Failed(
+                        MachineInventoryTransferFailure.NothingToTransfer);
+                    break;
+                }
+
+                var sourceSlot = _astronautInventory.Slots.First(
+                    slot => slot.ItemId == containerToLoad.Value);
+                var slotTransfer = InventoryTransfer.Transfer(
+                    _astronautInventory,
+                    sourceSlot.Index,
+                    _openMachine.InputInventory,
+                    ProductionConfiguration.FuelGeneratorTankTransferSlotIndex,
+                    1);
+                result = slotTransfer.Succeeded
+                    ? MachineInventoryTransferResult.Success(1)
+                    : MachineInventoryTransferResult.Failed(
+                        MachineInventoryTransferFailure.TargetFull);
                 break;
             case MachineKind.Generator when _openMachine.Definition.IsFuelledGenerator:
                 result = MachineInventoryTransfer.TransferExact(
@@ -1970,7 +3226,10 @@ public partial class FactoryRuntimeController : Node2D
             case MachineKind.Storage:
                 result = MachineInventoryTransfer.TransferAsMuchAsPossible(
                     _astronautInventory,
-                    _openMachine.InputInventory);
+                    _openMachine.InputInventory,
+                    itemId => MachineInventoryAcceptanceRules.CanStore(
+                        _openMachine.Definition,
+                        itemId));
                 break;
             case MachineKind.Research when TryGetSelectedResearch(_openMachine, out var research):
                 result = MachineInventoryTransfer.TransferExact(
@@ -2015,6 +3274,184 @@ public partial class FactoryRuntimeController : Node2D
         ShowTransferResult(result, "Eingabematerial ins Inventar zurückgenommen");
     }
 
+    public InventoryTransferResult PreviewOpenMachineSlotTransfer(
+        InventorySlotAddress source,
+        InventorySlotAddress target)
+    {
+        if (!TryResolveOpenMachinePanelInventory(source, out var sourceInventory, out var sourceKind) ||
+            !TryResolveOpenMachinePanelInventory(target, out var targetInventory, out var targetKind) ||
+            ReferenceEquals(sourceInventory, targetInventory) ||
+            !IsAllowedMachinePanelTransfer(sourceKind, targetKind))
+        {
+            return InventoryTransferResult.Failed(InventoryTransferFailure.IncompatibleStacks);
+        }
+
+        var sourceSlot = sourceInventory.GetSlot(source.SlotIndex);
+        if (sourceSlot.ItemId is not { } itemId ||
+            targetKind == MachinePanelInventoryKind.Input && !CanOpenMachineAcceptInput(itemId))
+        {
+            return InventoryTransferResult.Failed(InventoryTransferFailure.ItemNotAccepted);
+        }
+
+        var targetSlot = targetInventory.GetSlot(target.SlotIndex);
+        if (!targetSlot.IsEmpty && targetSlot.ItemId != itemId)
+        {
+            return InventoryTransferResult.Failed(InventoryTransferFailure.IncompatibleStacks);
+        }
+
+        return InventoryTransfer.PreviewPrioritizingExistingStacks(
+            sourceInventory,
+            source.SlotIndex,
+            targetInventory,
+            target.SlotIndex);
+    }
+
+    public bool TransferOpenMachineSlot(InventorySlotAddress source, InventorySlotAddress target)
+    {
+        var preview = PreviewOpenMachineSlotTransfer(source, target);
+        if (!preview.Succeeded ||
+            !TryResolveOpenMachinePanelInventory(source, out var sourceInventory, out _) ||
+            !TryResolveOpenMachinePanelInventory(target, out var targetInventory, out _))
+        {
+            return false;
+        }
+
+        var result = InventoryTransfer.TransferPrioritizingExistingStacks(
+            sourceInventory,
+            source.SlotIndex,
+            targetInventory,
+            target.SlotIndex);
+        if (!result.Succeeded)
+        {
+            return false;
+        }
+
+        MarkDirty();
+        FactoryStateChanged?.Invoke();
+        return true;
+    }
+
+    public bool DeleteOpenMachineStack(InventorySlotAddress address)
+    {
+        if (!TryResolveOpenMachinePanelInventory(address, out var inventory, out var kind) ||
+            kind == MachinePanelInventoryKind.Personal)
+        {
+            return false;
+        }
+
+        var slot = inventory.GetSlot(address.SlotIndex);
+        if (slot.ItemId is not { } itemId ||
+            !inventory.RemoveFromSlot(address.SlotIndex, itemId, slot.Amount).Succeeded)
+        {
+            return false;
+        }
+
+        MarkDirty();
+        FactoryStateChanged?.Invoke();
+        return true;
+    }
+
+    private bool TryResolveOpenMachinePanelInventory(
+        InventorySlotAddress address,
+        out SlotInventory inventory,
+        out MachinePanelInventoryKind kind)
+    {
+        inventory = null!;
+        kind = MachinePanelInventoryKind.Personal;
+        if (_openMachine is null || address.SlotIndex < 0)
+        {
+            return false;
+        }
+
+        if (address.InventoryId == MachinePanelController.PersonalInventoryId)
+        {
+            inventory = _astronautInventory;
+            kind = MachinePanelInventoryKind.Personal;
+        }
+        else if (address.InventoryId == $"machine_input:{_openMachine.InstanceId.Value}")
+        {
+            inventory = _openMachine.InputInventory;
+            kind = MachinePanelInventoryKind.Input;
+        }
+        else if (address.InventoryId == $"machine_output:{_openMachine.InstanceId.Value}")
+        {
+            inventory = _openMachine.OutputInventory;
+            kind = MachinePanelInventoryKind.Output;
+        }
+        else
+        {
+            return false;
+        }
+
+        return address.SlotIndex < inventory.SlotCount;
+    }
+
+    private static bool IsAllowedMachinePanelTransfer(
+        MachinePanelInventoryKind source,
+        MachinePanelInventoryKind target) =>
+        source == MachinePanelInventoryKind.Personal && target == MachinePanelInventoryKind.Input ||
+        source is MachinePanelInventoryKind.Input or MachinePanelInventoryKind.Output &&
+        target == MachinePanelInventoryKind.Personal;
+
+    private bool CanOpenMachineAcceptInput(ItemId itemId)
+    {
+        if (_openMachine is null)
+        {
+            return false;
+        }
+
+        if (_openMachine.Definition.Id == MachineDefinitionIds.MobileMiner)
+        {
+            return itemId == ProductionItemIds.MobileBatteryPack;
+        }
+
+        if (_openMachine.Definition.IsFuelledGenerator)
+        {
+            return itemId == _openMachine.Definition.GeneratorFuelItemId ||
+                   itemId == _openMachine.Definition.GeneratorReturnedContainerItemId;
+        }
+
+        if (_openMachine.Definition.Kind == MachineKind.Research &&
+            TryGetSelectedResearch(_openMachine, out var research))
+        {
+            return research.MaterialCosts.Any(cost => cost.ItemId == itemId);
+        }
+
+        return _openMachine.SelectedRecipeId is { } recipeId &&
+               _recipeCatalog.Get(recipeId).Inputs.Any(input => input.ItemId == itemId);
+    }
+
+    private enum MachinePanelInventoryKind
+    {
+        Personal,
+        Input,
+        Output,
+    }
+
+    public void FillOpenGeneratorTank()
+    {
+        if (_openMachine is null)
+        {
+            return;
+        }
+
+        ShowGeneratorTankTransferResult(
+            GeneratorFuelTankTransfer.FillFromInput(_openMachine),
+            "Tank aufgefüllt");
+    }
+
+    public void DrainOpenGeneratorTank()
+    {
+        if (_openMachine is null)
+        {
+            return;
+        }
+
+        ShowGeneratorTankTransferResult(
+            GeneratorFuelTankTransfer.DrainToInputContainer(_openMachine),
+            "Tank geleert");
+    }
+
     public void MarkFuelChanged() => MarkDirty();
 
     public void MarkInventoryChanged()
@@ -2030,7 +3467,8 @@ public partial class FactoryRuntimeController : Node2D
             return;
         }
 
-        var saved = _stateStore.Save(new FactoryStateData(
+        CaptureDroppedItemViews();
+        var snapshot = new FactoryStateData(
             FactoryStateData.CurrentVersion,
             _machines.Values
                 .OrderBy(machine => machine.InstanceId.Value, StringComparer.Ordinal)
@@ -2045,13 +3483,26 @@ public partial class FactoryRuntimeController : Node2D
             _research.CreateSnapshot(),
             _firstBasicGenerator.FreeGeneratorAlreadyBuilt,
             _shipFuelProvider(),
+            _shipFuelTypeProvider(),
             new Dictionary<string, DateTimeOffset>(_lastSimulatedUtc, StringComparer.Ordinal),
             InventoryStatePersistence.Capture(_astronautInventory),
+            InventoryStatePersistence.Capture(_hotbarInventory),
+            _activeHotbarSlotProvider(),
+            InventoryStatePersistence.Capture(_toolInventoryState.Inventory),
+            _toolInventoryState.SelectedSlotIndex,
+            _toolInventoryState.IsHandModeActive,
             CaptureShipInventory(),
             _activeResearchStation?.Value,
             CapturePowerNetworkControls(),
             CaptureShipPowerState(),
-            CaptureShipDockingState()));
+            CaptureShipDockingState())
+        {
+            RadiationExposure = _radiationExposure.CreateSnapshot(),
+            DroppedItems = _droppedItems.Values
+                .OrderBy(item => item.Id, StringComparer.Ordinal)
+                .ToArray(),
+        };
+        var saved = _stateStore.Save(snapshot);
         _autosaveElapsed = 0;
         if (saved)
         {
@@ -2063,14 +3514,32 @@ public partial class FactoryRuntimeController : Node2D
     private void Restore(FactoryStateData saved)
     {
         _research = RestoreResearchSafely(saved.Research);
+        _radiationExposure = RadiationExposureState.Restore(saved.RadiationExposure);
         _firstBasicGenerator = new FirstBasicGeneratorState(saved.FirstBasicGeneratorBuilt);
-        _restoreShipFuel(saved.ShipFuel);
+        _restoreShipFuel(saved.ShipFuel, saved.ShipFuelType);
         _persistedShipPower = saved.ShipPower;
         _persistedShipDocking = saved.ShipDocking;
         _awaitingShipDockingRestore = saved.ShipDocking.IsAttached;
         RestorePowerNetworkControls(saved.PowerNetworkControls);
         InventoryStatePersistence.Restore(_astronautInventory, saved.AstronautInventory);
+        InventoryStatePersistence.Restore(_hotbarInventory, saved.HotbarInventory);
+        _restoreActiveHotbarSlot(saved.ActiveHotbarSlotIndex);
+        InventoryStatePersistence.Restore(_toolInventoryState.Inventory, saved.ToolInventory);
+        _toolInventoryState.SelectSlot(saved.SelectedToolSlotIndex);
+        if (saved.IsHandModeActive)
+        {
+            _toolInventoryState.ActivateHandMode();
+        }
+        else
+        {
+            _toolInventoryState.DeactivateHandMode();
+        }
         _pendingShipInventory = saved.ShipInventory.ToArray();
+        _droppedItems.Clear();
+        foreach (var item in saved.DroppedItems)
+        {
+            _droppedItems[item.Id] = item;
+        }
         foreach (var (cometId, timestamp) in saved.LastSimulatedUtcByComet)
         {
             _lastSimulatedUtc[cometId] = timestamp;
@@ -2266,16 +3735,125 @@ public partial class FactoryRuntimeController : Node2D
             return;
         }
 
+        var persistedRelativePosition = new WorldPosition(
+            _persistedShipDocking.RelativePositionX,
+            _persistedShipDocking.RelativePositionY);
+        var radialDirection = ShipDockingRestoreRules.ResolveRadialDirection(
+            persistedRelativePosition,
+            _persistedShipDocking.RelativeRotationRadians);
+        var direction = new Vector2((float)radialDirection.X, (float)radialDirection.Y);
+        var surfaceProjected = TryProjectPersistedDockingPoseOntoCurrentSurface(
+            comet,
+            direction,
+            out var relativePosition,
+            out var relativeRotation);
+        if (!surfaceProjected)
+        {
+            // A configured AsteroidView normally always exposes its outline. A conservative
+            // outside pose keeps a corrupt/legacy save collision-free while retaining attached
+            // cable identity until the player can deliberately disconnect it.
+            relativePosition = direction * (float)(
+                comet.Radius +
+                PlayerShipController.DockingCenterClearance +
+                PlayerShipController.DockingHullReach +
+                32.0);
+            relativeRotation = direction.Angle() + (Mathf.Pi * 0.5f);
+            GD.PushWarning(
+                $"Persisted docking pose on '{comet.CometId}' could not be projected onto the " +
+                "current surface; a conservative outside fallback was used.");
+        }
+
         _ship.RestoreAttachedPose(
             comet,
             comet.CometId,
-            new Vector2(
-                (float)_persistedShipDocking.RelativePositionX,
-                (float)_persistedShipDocking.RelativePositionY),
-            (float)_persistedShipDocking.RelativeRotationRadians,
+            relativePosition,
+            relativeRotation,
             _persistedShipDocking.LandingLegProgress);
         _awaitingShipDockingRestore = false;
+        _persistedShipDocking = new ShipDockingStateData(
+            true,
+            comet.CometId,
+            Mathf.FloorToInt(_ship.GlobalPosition.X / _sectorSize),
+            Mathf.FloorToInt(_ship.GlobalPosition.Y / _sectorSize),
+            relativePosition.X,
+            relativePosition.Y,
+            relativeRotation,
+            _persistedShipDocking.LandingLegProgress,
+            _ship.GlobalPosition.X,
+            _ship.GlobalPosition.Y,
+            _ship.GlobalRotation);
         SynchronizeShipPowerDocking(markDirty: false);
+        MarkDirty();
+    }
+
+    private static bool TryProjectPersistedDockingPoseOntoCurrentSurface(
+        AsteroidView comet,
+        Vector2 radialDirection,
+        out Vector2 relativePosition,
+        out float relativeRotation)
+    {
+        relativePosition = default;
+        relativeRotation = 0;
+        if (!radialDirection.IsFinite() || radialDirection.LengthSquared() <= 0.000001f)
+        {
+            return false;
+        }
+
+        radialDirection = radialDirection.Normalized();
+        var probeRadius = (float)(
+            comet.Radius +
+            PlayerShipController.DockingCenterClearance +
+            PlayerShipController.DockingHullReach);
+        var outsideProbe = comet.ToGlobal(radialDirection * probeRadius);
+        if (!comet.TryGetClosestSurfacePoint(
+                outsideProbe,
+                out var surfacePoint,
+                out var outwardNormal,
+                out _))
+        {
+            return false;
+        }
+
+        // The view supplies a radial outward normal. Guard against a reversed transform or
+        // malformed legacy geometry before using it to offset the full ship hull.
+        var centerToSurface = surfacePoint - comet.GlobalPosition;
+        if (centerToSurface.Dot(outwardNormal) < 0)
+        {
+            outwardNormal = -outwardNormal;
+        }
+
+        var localSurfacePoint = comet.ToLocal(surfacePoint);
+        var localNormalEnd = comet.ToLocal(surfacePoint + outwardNormal);
+        var localNormal = localNormalEnd - localSurfacePoint;
+        if (!localNormal.IsFinite() || localNormal.LengthSquared() <= 0.000001f)
+        {
+            return false;
+        }
+
+        var projection = ShipDockingRestoreRules.ProjectOntoCurrentSurface(
+            new WorldPosition(localSurfacePoint.X, localSurfacePoint.Y),
+            new WorldPosition(localNormal.X, localNormal.Y),
+            PlayerShipController.DockingCenterClearance);
+        relativePosition = new Vector2(
+            (float)projection.RelativeAttachmentPosition.X,
+            (float)projection.RelativeAttachmentPosition.Y);
+        relativeRotation = (float)projection.RelativeAttachmentRotationRadians;
+        var projectedGlobalPosition = comet.ToGlobal(relativePosition);
+        if (!relativePosition.IsFinite() ||
+            !float.IsFinite(relativeRotation) ||
+            comet.ContainsWorldPoint(projectedGlobalPosition) ||
+            !comet.TryGetClosestSurfacePoint(
+                projectedGlobalPosition,
+                out _,
+                out _,
+                out var projectedSurfaceDistance))
+        {
+            return false;
+        }
+
+        // Leave a small numerical margin beyond the actual scaled hull. This prevents a restored
+        // CharacterBody from starting in contact and jittering before the first physics frame.
+        return projectedSurfaceDistance >= PlayerShipController.DockingHullReach + 2.0f;
     }
 
     private void RestorePendingShipConnections()
@@ -2304,19 +3882,70 @@ public partial class FactoryRuntimeController : Node2D
 
     private bool DetectPlayerInventoryChanges()
     {
+        var starterToolGranted = TryGrantMissingMachineDismantlingTool();
         var astronaut = InventoryStatePersistence.Capture(_astronautInventory);
+        var hotbar = InventoryStatePersistence.Capture(_hotbarInventory);
+        var tools = InventoryStatePersistence.Capture(_toolInventoryState.Inventory);
         var ship = CaptureShipInventory();
-        var changed = !_lastAstronautInventory.SequenceEqual(astronaut) ||
-                      !_lastShipInventory.SequenceEqual(ship);
+        var activeHotbarSlotIndex = _activeHotbarSlotProvider();
+        var changed = starterToolGranted ||
+                      !_lastAstronautInventory.SequenceEqual(astronaut) ||
+                      !_lastHotbarInventory.SequenceEqual(hotbar) ||
+                      !_lastToolInventory.SequenceEqual(tools) ||
+                      !_lastShipInventory.SequenceEqual(ship) ||
+                      _lastActiveHotbarSlotIndex != activeHotbarSlotIndex ||
+                      _lastSelectedToolSlotIndex != _toolInventoryState.SelectedSlotIndex ||
+                      _lastHandModeActive != _toolInventoryState.IsHandModeActive;
         _lastAstronautInventory = astronaut;
+        _lastHotbarInventory = hotbar;
+        _lastToolInventory = tools;
         _lastShipInventory = ship;
+        _lastActiveHotbarSlotIndex = activeHotbarSlotIndex;
+        _lastSelectedToolSlotIndex = _toolInventoryState.SelectedSlotIndex;
+        _lastHandModeActive = _toolInventoryState.IsHandModeActive;
         return changed;
+    }
+
+    /// <summary>
+    /// A completely full legacy save cannot accept the migrated tool during JSON loading. This
+    /// idempotent retry grants it as soon as the player creates one free slot, without replacing
+    /// anything and without duplicating a tool stored in a placed machine.
+    /// </summary>
+    private bool TryGrantMissingMachineDismantlingTool()
+    {
+        var itemId = ProductionItemIds.MachineDismantlingTool;
+        if (_astronautInventory.GetAmount(itemId) > 0 ||
+            _hotbarInventory.GetAmount(itemId) > 0 ||
+            _toolInventoryState.Inventory.GetAmount(itemId) > 0 ||
+            (_shipInventory?.GetAmount(itemId) ?? 0) > 0 ||
+            _machines.Values.Any(machine =>
+                machine.InputInventory.GetAmount(itemId) > 0 ||
+                machine.OutputInventory.GetAmount(itemId) > 0))
+        {
+            return false;
+        }
+
+        if (_toolInventoryState.Inventory.Add(itemId, 1).Succeeded ||
+            _astronautInventory.Add(itemId, 1).Succeeded ||
+            _hotbarInventory.Add(itemId, 1).Succeeded ||
+            (_shipInventory?.Add(itemId, 1).Succeeded ?? false))
+        {
+            GD.Print("STARTER_DISMANTLING_TOOL_REPAIR_OK: granted missing tool without replacing inventory items");
+            return true;
+        }
+
+        return false;
     }
 
     private void RememberPlayerInventories()
     {
         _lastAstronautInventory = InventoryStatePersistence.Capture(_astronautInventory);
+        _lastHotbarInventory = InventoryStatePersistence.Capture(_hotbarInventory);
+        _lastToolInventory = InventoryStatePersistence.Capture(_toolInventoryState.Inventory);
         _lastShipInventory = CaptureShipInventory();
+        _lastActiveHotbarSlotIndex = _activeHotbarSlotProvider();
+        _lastSelectedToolSlotIndex = _toolInventoryState.SelectedSlotIndex;
+        _lastHandModeActive = _toolInventoryState.IsHandModeActive;
     }
 
     private void RegisterComet(AsteroidView comet)
@@ -2523,6 +4152,14 @@ public partial class FactoryRuntimeController : Node2D
             {
                 state.AdvanceConstruction(deltaSeconds);
                 changed = true;
+            }
+
+            if (state.Definition.Id == MachineDefinitionIds.AutomaticMiner)
+            {
+                state.SetOutputConnectionAvailable(
+                    _connectionNetwork.GetConnectionsForMachine(state.InstanceId)
+                        .Any(connection => connection.Kind == ConnectionKind.ConveyorBelt &&
+                                           connection.Source.MachineId == state.InstanceId));
             }
         }
 
@@ -2748,10 +4385,8 @@ public partial class FactoryRuntimeController : Node2D
             MapCategory(definition.Category),
             MachinePresentationCatalog.Instance.Get(definition.Id).Glyph,
             costs,
-            IsUnlocked(definition.UnlockRequirement),
-            definition.UnlockRequirement is { } researchId
-                ? $"Forschung erforderlich: {_researchCatalog.Get(researchId).DisplayName}"
-                : string.Empty);
+            IsMachineUnlocked(definition),
+            GetMachineUnlockMessage(definition));
     }
 
     private BuildMachineViewModel CreateConnectionBuildViewModel(ConnectionTypeDefinition definition)
@@ -2780,17 +4415,40 @@ public partial class FactoryRuntimeController : Node2D
     private MachinePanelViewModel CreateProductionPanelViewModel(MachineState state)
     {
         var recipes = _recipeCatalog.ForMachine(state.Definition.Id)
+            .Where(IsRecipeUnlocked)
+            .Where(recipe => !recipe.IsExtractionRecipe ||
+                             state.ExtractionSource is not null &&
+                             recipe.SourceResourceId == state.ExtractionSource.ResourceId)
             .Select(recipe => CreateRecipeViewModel(state, recipe))
             .ToArray();
         var selected = state.SelectedRecipeId is { } selectedId
-            ? _recipeCatalog.Get(selectedId)
+            ? _recipeCatalog.Get(selectedId) is { } selectedRecipe && IsRecipeUnlocked(selectedRecipe)
+                ? selectedRecipe
+                : null
             : null;
-        return CreateBasePanel(
+        var model = CreateBasePanel(
             state,
             recipes,
             selected?.Id.Value,
             selected is null ? 0 : (float)(state.ProductionProgressSeconds / selected.DurationSeconds),
             selected is null ? 0 : (float)selected.RequiredPowerKilowatts);
+        if (state.ExtractionSource is null)
+        {
+            return model;
+        }
+
+        var source = state.ExtractionSource;
+        var purity = SpaceFactory.Core.World.Resources.MiningConfiguration.GetPurityDisplayName(source.Purity);
+        var rate = SpaceFactory.Core.World.Resources.MiningConfiguration.GetExtractionUnitsPerMinute(
+            source.BaseExtractionUnitsPerMinute,
+            source.Purity) * state.Definition.SpeedMultiplier;
+        return model with
+        {
+            StatusDetail = $"{GetStatusDetail(state.Status)} Quelle: {purity}, {rate:0.#}/min" +
+                           (state.Definition.Id == MachineDefinitionIds.MobileMiner
+                               ? $", Akku {state.InternalEnergyKilowattSeconds:0} kWs"
+                               : string.Empty),
+        };
     }
 
     private MachinePanelViewModel CreateGeneratorPanelViewModel(MachineState state)
@@ -2806,12 +4464,34 @@ public partial class FactoryRuntimeController : Node2D
                     (float)state.Definition.GeneratorFuelSecondsPerItem),
             }
             : Array.Empty<MachineRecipeViewModel>();
-        return CreateBasePanel(
+        var model = CreateBasePanel(
             state,
             recipes,
             recipes.FirstOrDefault()?.RecipeId,
             0,
             0);
+        if (state.Definition.Id != MachineDefinitionIds.FuelGenerator)
+        {
+            return model;
+        }
+
+        var transferSlot = state.InputInventory.GetSlot(
+            ProductionConfiguration.FuelGeneratorTankTransferSlotIndex);
+        var filledFuelId = state.Definition.GeneratorFuelItemId!.Value;
+        var emptyFuelId = state.Definition.GeneratorReturnedContainerItemId!.Value;
+        return model with
+        {
+            HasGeneratorFuelTankControls = true,
+            GeneratorFuelSeconds = (float)state.GeneratorFuelSecondsRemaining,
+            GeneratorFuelCapacitySeconds = (float)state.GeneratorFuelTankCapacitySeconds,
+            LoadedFilledFuelContainers = transferSlot.ItemId == filledFuelId ? transferSlot.Amount : 0,
+            LoadedEmptyFuelContainers = transferSlot.ItemId == emptyFuelId ? transferSlot.Amount : 0,
+            GeneratorTankTransferSlotOccupied = !transferSlot.IsEmpty,
+            GeneratorTankTransferSlotHasWrongContent =
+                !transferSlot.IsEmpty &&
+                transferSlot.ItemId != filledFuelId &&
+                transferSlot.ItemId != emptyFuelId,
+        };
     }
 
     private MachinePanelViewModel CreateStoragePanelViewModel(MachineState state)
@@ -2830,6 +4510,36 @@ public partial class FactoryRuntimeController : Node2D
         return CreateBasePanel(state, [recipe], recipe.RecipeId, 0, 0);
     }
 
+    private MachinePanelViewModel CreateBatteryPanelViewModel(MachineState state)
+    {
+        var stored = state.StoredGridEnergyKilowattSeconds;
+        var capacity = MachineEnergyConfiguration.BatteryBankCapacityKilowattSeconds;
+        var recipe = new MachineRecipeViewModel(
+            "battery_storage",
+            "Netzpuffer",
+            [],
+            [
+                new MachineOutputViewModel(
+                    "Gespeicherte Energie (kWs)",
+                    0,
+                    (int)Math.Round(stored),
+                    (int)Math.Round(capacity),
+                    new Color(0.24f, 0.85f, 1)),
+            ],
+            0);
+        var model = CreateBasePanel(
+            state,
+            [recipe],
+            recipe.RecipeId,
+            (float)(stored / capacity),
+            0);
+        return model with
+        {
+            StatusDetail = $"Netzspeicher {stored / 3600:0.00}/{capacity / 3600:0.00} kWh · " +
+                           $"max. {MachineEnergyConfiguration.BatteryBankMaximumChargeKilowatts:0} kW Laden/Entladen",
+        };
+    }
+
     private MachinePanelViewModel CreateResearchPanelViewModel(MachineState state)
     {
         var ownsActiveResearch = _research.ActiveResearchId is not null &&
@@ -2837,12 +4547,24 @@ public partial class FactoryRuntimeController : Node2D
         var selectedResearchId = ownsActiveResearch
             ? _research.ActiveResearchId
             : (_pendingResearch.TryGetValue(state.InstanceId, out var pending) ? pending : null);
-        var recipes = _researchCatalog.All
-            .OrderBy(research => research.DisplayName, StringComparer.CurrentCulture)
+        var recipes = _researchCatalog.TopologicalOrder
             .Select(research =>
             {
                 var completed = _research.IsCompleted(research.Id);
                 var prerequisiteReady = research.Prerequisites.All(_research.IsCompleted);
+                var discoveriesReady = research.RequiredDiscoveries.All(
+                    _research.DiscoveredResources.Contains);
+                var unlockMessage = completed
+                    ? "Bereits abgeschlossen"
+                    : !prerequisiteReady
+                        ? "Vorherige Forschung erforderlich"
+                        : !discoveriesReady
+                            ? $"Entdeckung erforderlich: {string.Join(", ", research.RequiredDiscoveries
+                                .Where(discovery => !_research.DiscoveredResources.Contains(discovery))
+                                .Select(discovery => _itemPresentation.GetOrCreateFallback(
+                                    discovery,
+                                    InventoryConfiguration.MaximumStackSize).DisplayName))}"
+                            : string.Empty;
                 return new MachineRecipeViewModel(
                     $"research:{research.Id.Value}",
                     completed ? $"{research.DisplayName} · abgeschlossen" : research.DisplayName,
@@ -2852,8 +4574,8 @@ public partial class FactoryRuntimeController : Node2D
                         state.InputInventory)).ToArray(),
                     [new MachineOutputViewModel("Technologie", 1, completed ? 1 : 0, 1, new Color(0.72f, 0.48f, 1))],
                     (float)research.DurationSeconds,
-                    !completed && prerequisiteReady,
-                    completed ? "Bereits abgeschlossen" : "Vorherige Forschung erforderlich");
+                    !completed && prerequisiteReady && discoveriesReady,
+                    unlockMessage);
             })
             .ToArray();
         var active = ownsActiveResearch && _research.ActiveResearchId is { } activeId
@@ -2910,6 +4632,16 @@ public partial class FactoryRuntimeController : Node2D
         var availablePower = _lastAvailablePowerByMachine.TryGetValue(state.InstanceId, out var componentPower)
             ? (float)componentPower
             : 0;
+        var selectedRecipe = selectedRecipeId is not null &&
+                             _recipeCatalog.TryGet(new RecipeId(selectedRecipeId), out var resolvedRecipe)
+            ? resolvedRecipe
+            : null;
+        var reservedWasteSlots = selectedRecipe is null
+            ? 0
+            : MachineOutputInventoryRules.GetReservedWasteSlotCount(
+                state.OutputInventory.SlotCount,
+                selectedRecipe.CombinedOutputs);
+        var firstWasteSlot = state.OutputInventory.SlotCount - reservedWasteSlots;
 
         return new MachinePanelViewModel(
             state.InstanceId.Value,
@@ -2922,8 +4654,64 @@ public partial class FactoryRuntimeController : Node2D
             state.IsEnabled,
             Mathf.Clamp(progress, 0, 1),
             requiredPower,
-            availablePower);
+            availablePower,
+            state.OutputInventory.Slots.Select(slot =>
+            {
+                if (slot.IsEmpty)
+                {
+                    return new MachineInventorySlotViewModel(
+                        slot.Index,
+                        null,
+                        string.Empty,
+                        0,
+                        slot.MaximumAmount,
+                        BuildingUiTheme.TextMuted,
+                        slot.Index >= firstWasteSlot);
+                }
+
+                var itemId = slot.ItemId!.Value;
+                var item = _itemPresentation.GetOrCreateFallback(
+                    itemId,
+                    state.OutputInventory.GetMaximumStackSize(itemId));
+                return new MachineInventorySlotViewModel(
+                    slot.Index,
+                    item.Id,
+                    item.DisplayName,
+                    slot.Amount,
+                    state.OutputInventory.GetMaximumStackSize(item.Id),
+                    item.Color,
+                    item.Product?.Category == ProductionItemCategory.Waste,
+                    item.Product?.HazardKind == ItemHazardKind.Radioactive);
+            }).ToArray(),
+            CreatePhysicalInventorySlotModels(state.InputInventory));
     }
+
+    private IReadOnlyList<MachineInventorySlotViewModel> CreatePhysicalInventorySlotModels(
+        SlotInventory inventory) => inventory.Slots.Select(slot =>
+    {
+        if (slot.IsEmpty)
+        {
+            return new MachineInventorySlotViewModel(
+                slot.Index,
+                null,
+                string.Empty,
+                0,
+                slot.MaximumAmount,
+                BuildingUiTheme.TextMuted);
+        }
+
+        var itemId = slot.ItemId!.Value;
+        var item = _itemPresentation.GetOrCreateFallback(itemId, inventory.GetMaximumStackSize(itemId));
+        return new MachineInventorySlotViewModel(
+            slot.Index,
+            itemId,
+            item.DisplayName,
+            slot.Amount,
+            inventory.GetMaximumStackSize(itemId),
+            item.Color,
+            IsWaste: item.Product?.Category == ProductionItemCategory.Waste,
+            IsRadioactive: item.Product?.HazardKind == ItemHazardKind.Radioactive);
+    }).ToArray();
 
     private MachineRecipeViewModel CreateRecipeViewModel(MachineState state, RecipeDefinition recipe) =>
         new(
@@ -2938,10 +4726,8 @@ public partial class FactoryRuntimeController : Node2D
                 output.Amount,
                 state.OutputInventory)).ToArray(),
             (float)recipe.DurationSeconds,
-            IsUnlocked(recipe.UnlockRequirement),
-            recipe.UnlockRequirement is { } researchId
-                ? $"Forschung erforderlich: {_researchCatalog.Get(researchId).DisplayName}"
-                : string.Empty);
+            IsRecipeUnlocked(recipe),
+            GetRecipeUnlockMessage(recipe));
 
     private MachineMaterialViewModel CreateMaterial(
         SpaceFactory.Core.Items.ItemId itemId,
@@ -2953,7 +4739,8 @@ public partial class FactoryRuntimeController : Node2D
             item.DisplayName,
             required,
             inventory.GetAmount(itemId),
-            item.Color);
+            item.Color,
+            item.Id);
     }
 
     private MachineOutputViewModel CreateOutput(
@@ -2964,7 +4751,15 @@ public partial class FactoryRuntimeController : Node2D
         var item = _itemPresentation.GetOrCreateFallback(itemId, inventory.MaximumStackSize);
         var stored = inventory.GetAmount(itemId);
         var capacity = stored + ProductionInventoryRules.GetAvailableCapacity(inventory, itemId);
-        return new MachineOutputViewModel(item.DisplayName, produced, stored, capacity, item.Color);
+        return new MachineOutputViewModel(
+            item.DisplayName,
+            produced,
+            stored,
+            capacity,
+            item.Color,
+            item.Id,
+            item.Product?.Category == ProductionItemCategory.Waste,
+            item.Product?.HazardKind == ItemHazardKind.Radioactive);
     }
 
     private void SetResearchActive(MachineState station, bool active)
@@ -3025,6 +4820,7 @@ public partial class FactoryRuntimeController : Node2D
             {
                 ResearchStartFailure.MissingMaterials => "Forschungsmaterialien fehlen",
                 ResearchStartFailure.MissingPrerequisite => "Vorherige Forschung fehlt",
+                ResearchStartFailure.MissingDiscovery => "Benötigte Ressource wurde noch nicht entdeckt",
                 ResearchStartFailure.AlreadyCompleted => "Forschung bereits abgeschlossen",
                 _ => "Forschung kann nicht gestartet werden",
             });
@@ -3055,14 +4851,220 @@ public partial class FactoryRuntimeController : Node2D
     private bool HasBuildMaterials(MachineDefinitionId definitionId)
     {
         var definition = _machineCatalog.Get(definitionId);
-        return IsUnlocked(definition.UnlockRequirement) &&
+        return IsMachineUnlocked(definition) &&
                ProductionInventoryRules.ContainsAll(
                    _astronautInventory,
                    _firstBasicGenerator.GetEffectiveBuildCosts(definition));
     }
 
+    private bool HasHotbarPlacementItem(MachineDefinitionId definitionId)
+    {
+        if (_hotbarPlacementSource is not { } source ||
+            !_machineCatalog.TryGet(definitionId, out var definition) || definition is null ||
+            definition.PlacementItemId != source.ItemId)
+        {
+            return false;
+        }
+
+        var slot = _hotbarInventory.GetSlot(source.SlotIndex);
+        return slot.ItemId == source.ItemId && slot.Amount > 0;
+    }
+
+    private IReadOnlyList<ItemAmount> GetActivePlacementCosts(MachineDefinition definition) =>
+        _hotbarPlacementSource is { } source && definition.PlacementItemId == source.ItemId
+            ? [new ItemAmount(source.ItemId, 1)]
+            : _firstBasicGenerator.GetEffectiveBuildCosts(definition);
+
+    private bool HasActivePlacementCosts(IReadOnlyList<ItemAmount> costs)
+    {
+        if (_hotbarPlacementSource is not { } source)
+        {
+            return ProductionInventoryRules.ContainsAll(_astronautInventory, costs);
+        }
+
+        return costs.Count == 1 && costs[0].ItemId == source.ItemId && costs[0].Amount == 1 &&
+               HasActivePlacementItem(source.ItemId);
+    }
+
+    private bool TryConsumeActivePlacementCosts(IReadOnlyList<ItemAmount> costs) =>
+        _hotbarPlacementSource is { } source
+            ? costs.Count == 1 && costs[0].ItemId == source.ItemId && costs[0].Amount == 1 &&
+              TryConsumeActivePlacementItem(source.ItemId)
+            : ProductionInventoryRules.TryRemoveAll(_astronautInventory, costs);
+
+    private bool TryRestoreActivePlacementCosts(IReadOnlyList<ItemAmount> costs) =>
+        _hotbarPlacementSource is { } source
+            ? costs.Count == 1 && costs[0].ItemId == source.ItemId && costs[0].Amount == 1 &&
+              TryRestoreActivePlacementItem(source.ItemId)
+            : ProductionInventoryRules.TryAddAll(_astronautInventory, costs);
+
+    private bool HasActivePlacementItem(ItemId itemId)
+    {
+        if (_hotbarPlacementSource is not { } source)
+        {
+            return _astronautInventory.GetAmount(itemId) > 0;
+        }
+
+        var slot = _hotbarInventory.GetSlot(source.SlotIndex);
+        return source.ItemId == itemId && slot.ItemId == itemId && slot.Amount > 0;
+    }
+
+    private bool TryConsumeActivePlacementItem(ItemId itemId) =>
+        _hotbarPlacementSource is { } source
+            ? source.ItemId == itemId &&
+              _hotbarInventory.RemoveFromSlot(source.SlotIndex, itemId, 1).Succeeded
+            : _astronautInventory.Remove(itemId, 1).Succeeded;
+
+    private bool TryRestoreActivePlacementItem(ItemId itemId) =>
+        _hotbarPlacementSource is { } source
+            ? source.ItemId == itemId &&
+              _hotbarInventory.AddToSlot(source.SlotIndex, itemId, 1).Succeeded
+            : _astronautInventory.Add(itemId, 1).Succeeded;
+
+    private bool IsConnectionUnlocked(ConnectionTypeDefinition definition)
+    {
+        var craftingRecipes = _recipeCatalog.All
+            .Where(recipe => recipe.Outputs.Any(output => output.ItemId == definition.RequiredBuildItemId))
+            .ToArray();
+        return craftingRecipes.Length == 0 || craftingRecipes.Any(IsRecipeUnlocked);
+    }
+
     private bool IsUnlocked(ResearchId? requirement) =>
         requirement is null || _research.IsCompleted(requirement.Value);
+
+    private bool IsMachineUnlocked(MachineDefinition definition)
+    {
+        if (!IsUnlocked(definition.UnlockRequirement))
+        {
+            return false;
+        }
+
+        var unlockingResearch = _researchCatalog.All
+            .Where(research => research.UnlockedMachines.Contains(definition.Id))
+            .ToArray();
+        return unlockingResearch.Length == 0 ||
+               unlockingResearch.Any(research => _research.IsCompleted(research.Id));
+    }
+
+    private string GetMachineUnlockMessage(MachineDefinition definition)
+    {
+        if (definition.UnlockRequirement is { } direct && !_research.IsCompleted(direct))
+        {
+            return $"Forschung erforderlich: {_researchCatalog.Get(direct).DisplayName}";
+        }
+
+        var unlockingResearch = _researchCatalog.All
+            .Where(research => research.UnlockedMachines.Contains(definition.Id))
+            .ToArray();
+        return unlockingResearch.Length > 0 &&
+               unlockingResearch.All(research => !_research.IsCompleted(research.Id))
+            ? $"Forschung erforderlich: {string.Join(" / ", unlockingResearch.Select(research => research.DisplayName))}"
+            : string.Empty;
+    }
+
+    private bool IsRecipeUnlocked(RecipeDefinition recipe)
+    {
+        if (!IsUnlocked(recipe.UnlockRequirement))
+        {
+            return false;
+        }
+
+        var recipeResearch = _researchCatalog.All
+            .Where(research => research.UnlockedRecipes.Contains(recipe.Id))
+            .ToArray();
+        if (recipeResearch.Length > 0 &&
+            recipeResearch.All(research => !_research.IsCompleted(research.Id)))
+        {
+            return false;
+        }
+
+        if (recipe.Tags.Contains("special-resource", StringComparer.Ordinal) &&
+            recipe.Inputs
+                .Select(input => input.ItemId)
+                .Where(itemId => DefaultProductionItemCatalog.Instance.TryGet(itemId, out var item) &&
+                                 item?.Category == ProductionItemCategory.RawMaterial)
+                .Any(itemId => !_research.DiscoveredResources.Contains(itemId)))
+        {
+            return false;
+        }
+
+        if (!recipe.Tags.Contains("alternative", StringComparer.Ordinal) &&
+            !recipe.Tags.Contains("endgame", StringComparer.Ordinal))
+        {
+            return recipe.TechnologyTier <= GetMaximumAccessibleNormalRecipeTier();
+        }
+
+        var directGroupUnlock = recipe.AlternativeGroup is { } group &&
+                                _research.CompletedResearch
+                                    .Select(_researchCatalog.Get)
+                                    .Any(research => research.UnlockedAlternativeRecipeGroups
+                                        .Any(unlocked => string.Equals(
+                                            unlocked.Value,
+                                            group,
+                                            StringComparison.Ordinal)));
+        return directGroupUnlock || _research.CompletedResearch
+            .Select(_researchCatalog.Get)
+            .Any(research => research.Tier >= recipe.TechnologyTier);
+    }
+
+    private string GetRecipeUnlockMessage(RecipeDefinition recipe)
+    {
+        if (recipe.UnlockRequirement is { } researchId && !_research.IsCompleted(researchId))
+        {
+            return $"Forschung erforderlich: {_researchCatalog.Get(researchId).DisplayName}";
+        }
+
+        var recipeResearch = _researchCatalog.All
+            .Where(research => research.UnlockedRecipes.Contains(recipe.Id))
+            .ToArray();
+        if (recipeResearch.Length > 0 &&
+            recipeResearch.All(research => !_research.IsCompleted(research.Id)))
+        {
+            return $"Forschung erforderlich: {string.Join(" / ", recipeResearch.Select(research => research.DisplayName))}";
+        }
+
+        if (recipe.Tags.Contains("special-resource", StringComparer.Ordinal))
+        {
+            var missing = recipe.Inputs
+                .Select(input => input.ItemId)
+                .Where(itemId => DefaultProductionItemCatalog.Instance.TryGet(itemId, out var item) &&
+                                 item?.Category == ProductionItemCategory.RawMaterial &&
+                                 !_research.DiscoveredResources.Contains(itemId))
+                .Select(itemId => _itemPresentation.GetOrCreateFallback(
+                    itemId,
+                    InventoryConfiguration.MaximumStackSize).DisplayName)
+                .Distinct(StringComparer.CurrentCulture)
+                .ToArray();
+            if (missing.Length > 0)
+            {
+                return $"Ressource entdecken: {string.Join(", ", missing)}";
+            }
+        }
+
+        if (!recipe.Tags.Contains("alternative", StringComparer.Ordinal) &&
+            !recipe.Tags.Contains("endgame", StringComparer.Ordinal) &&
+            recipe.TechnologyTier > GetMaximumAccessibleNormalRecipeTier())
+        {
+            return $"Forschung bis Stufe {(int)recipe.TechnologyTier - 1} erforderlich";
+        }
+
+        return recipe.Tags.Contains("alternative", StringComparer.Ordinal) ||
+               recipe.Tags.Contains("endgame", StringComparer.Ordinal)
+            ? $"Fortgeschrittene Forschung (Stufe {(int)recipe.TechnologyTier}) erforderlich"
+            : string.Empty;
+    }
+
+    private TechnologyTier GetMaximumAccessibleNormalRecipeTier()
+    {
+        var highestCompletedTier = _research.CompletedResearch.Count == 0
+            ? 0
+            : _research.CompletedResearch
+                .Select(_researchCatalog.Get)
+                .Max(research => (int)research.Tier);
+        return (TechnologyTier)Math.Min(
+            (int)TechnologyTier.Tier10,
+            highestCompletedTier + 1);
+    }
 
     private void ShowTransferResult(MachineInventoryTransferResult result, string successMessage)
     {
@@ -3084,6 +5086,31 @@ public partial class FactoryRuntimeController : Node2D
         });
     }
 
+    private void ShowGeneratorTankTransferResult(
+        GeneratorFuelTankTransferResult result,
+        string successMessage)
+    {
+        if (result.Succeeded)
+        {
+            MarkDirty();
+            FactoryStateChanged?.Invoke();
+            _showMessage(successMessage);
+            return;
+        }
+
+        _showMessage(result.Failure switch
+        {
+            GeneratorFuelTankTransferFailure.TankFull => "Tank voll",
+            GeneratorFuelTankTransferFailure.TankEmpty => "Tank leer",
+            GeneratorFuelTankTransferFailure.TankCannotFillContainer => "Zu wenig Treibstoff",
+            GeneratorFuelTankTransferFailure.MissingFilledContainer => "Gefüllter Behälter fehlt",
+            GeneratorFuelTankTransferFailure.MissingEmptyContainer => "Leerer Behälter fehlt",
+            GeneratorFuelTankTransferFailure.WrongContent => "Falscher Inhalt",
+            GeneratorFuelTankTransferFailure.TransferSlotBlocked => "Tank-Slot blockiert",
+            _ => "Tank nicht verfügbar",
+        });
+    }
+
     private void MarkDirty()
     {
         _dirty = true;
@@ -3099,6 +5126,231 @@ public partial class FactoryRuntimeController : Node2D
         MachineCategory.Research => BuildMenuCategory.Research,
         _ => throw new ArgumentOutOfRangeException(nameof(category), category, null),
     };
+
+    private bool TryResolveDropSource(InventorySlotAddress address, out SlotInventory inventory)
+    {
+        if (address.InventoryId.StartsWith("machine_output:", StringComparison.Ordinal) &&
+            _machines.TryGetValue(
+                new MachineInstanceId(address.InventoryId["machine_output:".Length..]),
+                out var outputMachine))
+        {
+            inventory = outputMachine.OutputInventory;
+            return address.SlotIndex >= 0 && address.SlotIndex < inventory.SlotCount;
+        }
+
+        if (address.InventoryId.StartsWith("machine_input:", StringComparison.Ordinal) &&
+            _machines.TryGetValue(
+                new MachineInstanceId(address.InventoryId["machine_input:".Length..]),
+                out var inputMachine))
+        {
+            inventory = inputMachine.InputInventory;
+            return address.SlotIndex >= 0 && address.SlotIndex < inventory.SlotCount;
+        }
+
+        inventory = address.InventoryId switch
+        {
+            InventoryMenuController.AstronautInventoryId => _astronautInventory,
+            MachinePanelController.PersonalInventoryId => _astronautInventory,
+            InventoryMenuController.HotbarInventoryId => _hotbarInventory,
+            InventoryMenuController.ToolInventoryId => _toolInventoryState.Inventory,
+            InventoryMenuController.ShipInventoryId when _shipInventory is not null => _shipInventory,
+            InventoryMenuController.StorageInventoryId when _openMachine is { Definition.Kind: MachineKind.Storage } =>
+                _openMachine.InputInventory,
+            _ => null!,
+        };
+        return inventory is not null && address.SlotIndex >= 0 && address.SlotIndex < inventory.SlotCount;
+    }
+
+    private bool TryFindSafeDropPosition(
+        Vector2 ownerPosition,
+        Vector2 requestedWorldPosition,
+        out Vector2 safePosition)
+    {
+        safePosition = default;
+        var direction = (requestedWorldPosition - ownerPosition).Normalized();
+        if (direction == Vector2.Zero)
+        {
+            direction = Vector2.Right.Rotated((float)(ownerPosition.X * 0.013 + ownerPosition.Y * 0.007));
+        }
+
+        // Honour the visible backdrop position selected by the player first. On a large comet,
+        // every short offset around the astronaut can still overlap the asteroid even though the
+        // cursor itself is already over clear space. Intermediate candidates retain the safe
+        // fallback behaviour when the exact cursor position is obstructed.
+        var requestedDistance = ownerPosition.DistanceTo(requestedWorldPosition);
+        var distances = new[]
+            {
+                requestedDistance,
+                requestedDistance * 0.75f,
+                requestedDistance * 0.5f,
+                330,
+                235,
+                145,
+                (float)WorldItemDropConfiguration.SpawnOffset,
+            }
+            .Where(distance => distance >= WorldItemDropConfiguration.SpawnOffset)
+            .Distinct()
+            .ToArray();
+        ReadOnlySpan<float> angles = [0, -0.32f, 0.32f, -0.65f, 0.65f];
+        foreach (var distance in distances)
+        {
+            foreach (var angle in angles)
+            {
+                var candidate = ownerPosition + direction.Rotated(angle) * distance;
+                if (IsDropPositionClear(candidate))
+                {
+                    safePosition = candidate;
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private bool IsDropPositionClear(Vector2 position)
+    {
+        var query = new PhysicsShapeQueryParameters2D
+        {
+            Shape = new CircleShape2D
+            {
+                Radius = (float)WorldItemDropConfiguration.SpawnClearanceRadius,
+            },
+            Transform = new Transform2D(0, position),
+            CollisionMask = 1u | 2u | ResourceDepositView.ResourceCollisionLayer |
+                            MachineView.MachineCollisionLayer | DroppedItemView.DroppedItemCollisionLayer,
+            CollideWithAreas = true,
+            CollideWithBodies = true,
+        };
+        return GetWorld2D().DirectSpaceState.IntersectShape(query, 1).Count == 0;
+    }
+
+    private static Vector2 LimitDroppedItemVelocity(Vector2 velocity)
+    {
+        var maximum = (float)WorldItemDropConfiguration.MaximumInheritedSpeed;
+        return velocity.LengthSquared() > maximum * maximum
+            ? velocity.Normalized() * maximum
+            : velocity;
+    }
+
+    private bool TryCreateDroppedItemView(DroppedItemStateData state)
+    {
+        if (_droppedItemViews.ContainsKey(state.Id))
+        {
+            return true;
+        }
+
+        try
+        {
+            var itemId = new ItemId(state.ItemId);
+            var presentation = _itemPresentation.GetOrCreateFallback(
+                itemId,
+                DefaultProductionItemCatalog.Instance.TryGet(itemId, out var definition) && definition is not null
+                    ? definition.MaximumStackSize
+                    : InventoryConfiguration.MaximumStackSize);
+            var view = new DroppedItemView { Name = $"DroppedItem_{state.Id}" };
+            view.Configure(state, presentation);
+            AddChild(view);
+            _droppedItemViews.Add(state.Id, view);
+            return true;
+        }
+        catch (Exception exception)
+        {
+            GD.PushError($"Dropped item '{state.Id}' could not be presented: {exception.Message}");
+            return false;
+        }
+    }
+
+    private void RefreshDroppedItems()
+    {
+        CaptureDroppedItemViews();
+        if (_dropPickupActiveProvider?.Invoke() == true && _dropOwnerPositionProvider is not null)
+        {
+            var playerPosition = _dropOwnerPositionProvider();
+            var radiusSquared = (float)(WorldItemDropConfiguration.PickupRadius *
+                                        WorldItemDropConfiguration.PickupRadius);
+            foreach (var pair in _droppedItemViews.ToArray())
+            {
+                if (pair.Value.GlobalPosition.DistanceSquaredTo(playerPosition) > radiusSquared ||
+                    !_droppedItems.TryGetValue(pair.Key, out var state))
+                {
+                    continue;
+                }
+
+                var itemId = new ItemId(state.ItemId);
+                if (!_astronautInventory.Add(itemId, state.Amount).Succeeded)
+                {
+                    continue;
+                }
+
+                RemoveDroppedItem(pair.Key);
+                _showMessage($"{_itemPresentation.GetOrCreateFallback(itemId, state.Amount).DisplayName} aufgenommen");
+                MarkInventoryChanged();
+            }
+        }
+
+        RefreshDroppedItemViews(force: false);
+    }
+
+    private void CaptureDroppedItemViews()
+    {
+        foreach (var pair in _droppedItemViews)
+        {
+            if (_droppedItems.TryGetValue(pair.Key, out var state) &&
+                GodotObject.IsInstanceValid(pair.Value))
+            {
+                var captured = pair.Value.Capture(state);
+                if (captured != state)
+                {
+                    _droppedItems[pair.Key] = captured;
+                    _dirty = true;
+                }
+            }
+        }
+    }
+
+    private void RefreshDroppedItemViews(bool force)
+    {
+        foreach (var state in _droppedItems.Values)
+        {
+            if (ShouldPresentDroppedItem(state))
+            {
+                TryCreateDroppedItemView(state);
+            }
+            else if (_droppedItemViews.TryGetValue(state.Id, out var view))
+            {
+                _droppedItemViews.Remove(state.Id);
+                view.QueueFree();
+            }
+        }
+
+        if (force)
+        {
+            CaptureDroppedItemViews();
+        }
+    }
+
+    private bool ShouldPresentDroppedItem(DroppedItemStateData state)
+    {
+        if (_dropOwnerPositionProvider is null || _sectorSize <= 0)
+        {
+            return true;
+        }
+
+        var owner = _dropOwnerPositionProvider();
+        var maximumDistance = _sectorSize * 2.5f;
+        return new Vector2((float)state.PositionX, (float)state.PositionY)
+                   .DistanceSquaredTo(owner) <= maximumDistance * maximumDistance;
+    }
+
+    private void RemoveDroppedItem(string id)
+    {
+        _droppedItems.Remove(id);
+        if (_droppedItemViews.Remove(id, out var view) && GodotObject.IsInstanceValid(view))
+        {
+            view.QueueFree();
+        }
+    }
 
     private static MachineUiStatus MapStatus(MachineOperationStatus status) => status switch
     {
@@ -3122,16 +5374,45 @@ public partial class FactoryRuntimeController : Node2D
         MachineOperationStatus.WaitingForMaterial => "Eingabematerialien fehlen.",
         MachineOperationStatus.WaitingForEnergy => "Das lokale Stromnetz liefert zu wenig Leistung.",
         MachineOperationStatus.OutputFull => "Der Ausgabespeicher ist voll.",
+        MachineOperationStatus.MissingResourceSource => "Keine passende Erzquelle gebunden.",
+        MachineOperationStatus.WaitingForLogistics => "Kein Förderband am Miner-Ausgang angeschlossen.",
         _ => "Maschine ist blockiert.",
     };
 
     private static string GetFunctionSummary(MachineDefinition definition) => definition.Kind switch
     {
         MachineKind.Generator => $"Erzeugt {definition.GeneratedPowerKilowatts:0} kW im lokalen Netz",
-        MachineKind.Storage => $"Lagert bis zu {ProductionConfiguration.StorageContainerSlotCount} Stapel",
+        MachineKind.Storage => $"Lagert bis zu {definition.InputSlotCount} Stapel",
         MachineKind.Research => "Schaltet Maschinen und Rezepte frei",
         _ => "Verarbeitet Materialien nach auswählbaren Rezepten",
     };
+
+    private readonly record struct ConnectionPlacementEvaluation(
+        bool Succeeded,
+        string FailureMessage,
+        ConnectionTypeDefinition? Type,
+        MachineView? SourceView,
+        MachineView? TargetView,
+        MachinePortDefinition? SourcePort,
+        MachinePortDefinition? TargetPort)
+    {
+        public static ConnectionPlacementEvaluation Failed(string message) =>
+            new(false, message, null, null, null, null, null);
+
+        public static ConnectionPlacementEvaluation ForSource(
+            ConnectionTypeDefinition type,
+            MachineView source,
+            MachinePortDefinition sourcePort) =>
+            new(true, string.Empty, type, source, null, sourcePort, null);
+
+        public static ConnectionPlacementEvaluation ForTarget(
+            ConnectionTypeDefinition type,
+            MachineView source,
+            MachineView target,
+            MachinePortDefinition sourcePort,
+            MachinePortDefinition targetPort) =>
+            new(true, string.Empty, type, source, target, sourcePort, targetPort);
+    }
 
     private readonly record struct PowerEndpointCandidate(
         PowerInteractionTarget Target,
@@ -3140,11 +5421,22 @@ public partial class FactoryRuntimeController : Node2D
         PowerCableVisualEndpoint Visual,
         string DisplayName);
 
+    private sealed record DismantlingTarget(
+        string StableId,
+        MachineInstanceId? MachineId,
+        MachineConnectionId? ConnectionId,
+        Vector2 WorldPosition,
+        double DurationSeconds);
+
+    private readonly record struct HotbarPlacementSource(int SlotIndex, ItemId ItemId);
+
     private static MachineSimulationFingerprint CreateSimulationFingerprint(MachineState state) => new(
         state.Status,
         state.ConstructionProgressSeconds,
         state.ProductionProgressSeconds,
         state.GeneratorFuelSecondsRemaining,
+        state.InternalEnergyKilowattSeconds,
+        state.StoredGridEnergyKilowattSeconds,
         state.InputInventory.TotalItemCount,
         state.OutputInventory.TotalItemCount);
 
@@ -3153,13 +5445,16 @@ public partial class FactoryRuntimeController : Node2D
         _research.ProgressSeconds,
         _research.IsEnabled,
         _research.Status,
-        _research.CompletedResearch.Count);
+        _research.CompletedResearch.Count,
+        _research.DiscoveredResources.Count);
 
     private readonly record struct MachineSimulationFingerprint(
         MachineOperationStatus Status,
         double ConstructionProgress,
         double ProductionProgress,
         double GeneratorFuel,
+        double InternalEnergy,
+        double StoredGridEnergy,
         int InputItems,
         int OutputItems);
 
@@ -3168,5 +5463,6 @@ public partial class FactoryRuntimeController : Node2D
         double Progress,
         bool Enabled,
         ResearchStatus Status,
-        int CompletedCount);
+        int CompletedCount,
+        int DiscoveredResourceCount);
 }

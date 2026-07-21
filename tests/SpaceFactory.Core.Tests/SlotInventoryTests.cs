@@ -5,14 +5,46 @@ namespace SpaceFactory.Core.Tests;
 
 public sealed class SlotInventoryTests
 {
+    [Fact]
+    public void RemoveFromSlot_ConsumesOnlyTheSelectedHotbarStack()
+    {
+        var inventory = new SlotInventory(3);
+        Assert.True(inventory.Add(IronOre, 400).Succeeded);
+
+        var result = inventory.RemoveFromSlot(0, IronOre, 1);
+
+        Assert.True(result.Succeeded);
+        Assert.Equal(199, inventory.GetSlot(0).Amount);
+        Assert.Equal(200, inventory.GetSlot(1).Amount);
+        Assert.False(inventory.RemoveFromSlot(2, IronOre, 1).Succeeded);
+    }
+
+    [Fact]
+    public void AddToSlot_RestoresAPlacementItemToTheSelectedHotbarStackOnly()
+    {
+        var inventory = new SlotInventory(3);
+        Assert.True(inventory.AddToSlot(0, IronOre, 2).Succeeded);
+        Assert.True(inventory.AddToSlot(1, IronOre, 2).Succeeded);
+        Assert.True(inventory.RemoveFromSlot(1, IronOre, 1).Succeeded);
+
+        var restored = inventory.AddToSlot(1, IronOre, 1);
+
+        Assert.True(restored.Succeeded);
+        Assert.Equal(2, inventory.GetSlot(0).Amount);
+        Assert.Equal(2, inventory.GetSlot(1).Amount);
+        Assert.True(inventory.GetSlot(2).IsEmpty);
+    }
+
     private static readonly ItemId IronOre = new("iron_ore");
     private static readonly ItemId WaterIce = new("water_ice");
 
     [Fact]
     public void Configuration_UsesRequestedInventorySizesAndStackLimit()
     {
-        Assert.Equal(20, InventoryConfiguration.AstronautSlotCount);
-        Assert.Equal(50, InventoryConfiguration.ShipSlotCount);
+        Assert.Equal(24, InventoryConfiguration.AstronautSlotCount);
+        Assert.Equal(6, InventoryConfiguration.HotbarSlotCount);
+        Assert.Equal(4, InventoryConfiguration.ToolSlotCount);
+        Assert.Equal(56, InventoryConfiguration.ShipSlotCount);
         Assert.Equal(200, InventoryConfiguration.MaximumStackSize);
     }
 
@@ -21,8 +53,8 @@ public sealed class SlotInventoryTests
     {
         var inventory = new SlotInventory(InventoryConfiguration.AstronautSlotCount);
 
-        Assert.Equal(20, inventory.SlotCount);
-        Assert.Equal(Enumerable.Range(0, 20), inventory.Slots.Select(slot => slot.Index));
+        Assert.Equal(24, inventory.SlotCount);
+        Assert.Equal(Enumerable.Range(0, 24), inventory.Slots.Select(slot => slot.Index));
         Assert.All(inventory.Slots, slot =>
         {
             Assert.True(slot.IsEmpty);
@@ -59,6 +91,18 @@ public sealed class SlotInventoryTests
         Assert.True(result.Succeeded);
         Assert.Equal(200, inventory.GetSlot(0).Amount);
         Assert.Equal(2, inventory.GetSlot(1).Amount);
+    }
+
+    [Fact]
+    public void AddToSlot_RestoresTheExactHotbarStackWithoutSpilling()
+    {
+        var inventory = new SlotInventory(2);
+        Assert.True(inventory.AddToSlot(1, IronOre, 2).Succeeded);
+        Assert.True(inventory.AddToSlot(1, IronOre, 1).Succeeded);
+
+        Assert.True(inventory.GetSlot(0).IsEmpty);
+        Assert.Equal(IronOre, inventory.GetSlot(1).ItemId);
+        Assert.Equal(3, inventory.GetSlot(1).Amount);
     }
 
     [Fact]

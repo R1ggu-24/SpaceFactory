@@ -198,66 +198,13 @@ public sealed class MachineConnectionNetwork
             return MachineConnectionResult.Failed(MachineConnectionFailure.DuplicateConnectionId);
         }
 
-        if (!_connectionTypes.TryGet(connectionTypeId, out var connectionType) || connectionType is null)
+        var validationFailure = ValidateConnection(connectionTypeId, source, target);
+        if (validationFailure != MachineConnectionFailure.None)
         {
-            return MachineConnectionResult.Failed(MachineConnectionFailure.UnknownConnectionType);
+            return MachineConnectionResult.Failed(validationFailure);
         }
 
-        if (source.MachineId == target.MachineId)
-        {
-            return MachineConnectionResult.Failed(MachineConnectionFailure.SameMachine);
-        }
-
-        var sourceResolution = ResolveEndpoint(source, connectionType.Medium);
-        if (sourceResolution.Failure != MachineConnectionFailure.None)
-        {
-            return MachineConnectionResult.Failed(sourceResolution.Failure);
-        }
-
-        var targetResolution = ResolveEndpoint(target, connectionType.Medium);
-        if (targetResolution.Failure != MachineConnectionFailure.None)
-        {
-            return MachineConnectionResult.Failed(targetResolution.Failure);
-        }
-
-        if (!string.Equals(
-                sourceResolution.CometId,
-                targetResolution.CometId,
-                StringComparison.Ordinal))
-        {
-            return MachineConnectionResult.Failed(MachineConnectionFailure.DifferentComets);
-        }
-
-        if (sourceResolution.Medium != connectionType.Medium || targetResolution.Medium != connectionType.Medium)
-        {
-            return MachineConnectionResult.Failed(MachineConnectionFailure.PortMediumMismatch);
-        }
-
-        if ((connectionType.IsDirectional && (!sourceResolution.CanSend || !targetResolution.CanReceive)) ||
-            (!connectionType.IsDirectional &&
-             !((sourceResolution.CanSend && targetResolution.CanReceive) ||
-               (targetResolution.CanSend && sourceResolution.CanReceive))))
-        {
-            return MachineConnectionResult.Failed(MachineConnectionFailure.DirectionMismatch);
-        }
-
-        if (connectionType.Medium != TransportMedium.Power &&
-            !HaveCompatibleItems(sourceResolution.MachinePort!, targetResolution.MachinePort!))
-        {
-            return MachineConnectionResult.Failed(MachineConnectionFailure.ItemCompatibilityMismatch);
-        }
-
-        if (HasEquivalentEndpoints(connectionType, source, target))
-        {
-            return MachineConnectionResult.Failed(MachineConnectionFailure.DuplicateEndpoints);
-        }
-
-        if (CountConnections(source) >= sourceResolution.MaximumConnections ||
-            CountConnections(target) >= targetResolution.MaximumConnections)
-        {
-            return MachineConnectionResult.Failed(MachineConnectionFailure.PortCapacityReached);
-        }
-
+        var connectionType = _connectionTypes.Get(connectionTypeId);
         var connection = new MachineConnection(
             connectionId,
             connectionType.Id,
@@ -272,6 +219,79 @@ public sealed class MachineConnectionNetwork
 
         TopologyVersion++;
         return MachineConnectionResult.Success(connection);
+    }
+
+    /// <summary>
+    /// Evaluates exactly the same endpoint, compatibility and capacity rules as
+    /// <see cref="TryConnect"/> without mutating topology. Placement previews use this path so a
+    /// green cable can never be rejected by a different set of rules on click.
+    /// </summary>
+    public MachineConnectionFailure ValidateConnection(
+        ConnectionTypeId connectionTypeId,
+        MachineConnectionEndpoint source,
+        MachineConnectionEndpoint target)
+    {
+        if (!_connectionTypes.TryGet(connectionTypeId, out var connectionType) || connectionType is null)
+        {
+            return MachineConnectionFailure.UnknownConnectionType;
+        }
+
+        if (source.MachineId == target.MachineId)
+        {
+            return MachineConnectionFailure.SameMachine;
+        }
+
+        var sourceResolution = ResolveEndpoint(source, connectionType.Medium);
+        if (sourceResolution.Failure != MachineConnectionFailure.None)
+        {
+            return sourceResolution.Failure;
+        }
+
+        var targetResolution = ResolveEndpoint(target, connectionType.Medium);
+        if (targetResolution.Failure != MachineConnectionFailure.None)
+        {
+            return targetResolution.Failure;
+        }
+
+        if (!string.Equals(
+                sourceResolution.CometId,
+                targetResolution.CometId,
+                StringComparison.Ordinal))
+        {
+            return MachineConnectionFailure.DifferentComets;
+        }
+
+        if (sourceResolution.Medium != connectionType.Medium || targetResolution.Medium != connectionType.Medium)
+        {
+            return MachineConnectionFailure.PortMediumMismatch;
+        }
+
+        if ((connectionType.IsDirectional && (!sourceResolution.CanSend || !targetResolution.CanReceive)) ||
+            (!connectionType.IsDirectional &&
+             !((sourceResolution.CanSend && targetResolution.CanReceive) ||
+               (targetResolution.CanSend && sourceResolution.CanReceive))))
+        {
+            return MachineConnectionFailure.DirectionMismatch;
+        }
+
+        if (connectionType.Medium != TransportMedium.Power &&
+            !HaveCompatibleItems(sourceResolution.MachinePort!, targetResolution.MachinePort!))
+        {
+            return MachineConnectionFailure.ItemCompatibilityMismatch;
+        }
+
+        if (HasEquivalentEndpoints(connectionType, source, target))
+        {
+            return MachineConnectionFailure.DuplicateEndpoints;
+        }
+
+        if (CountConnections(source) >= sourceResolution.MaximumConnections ||
+            CountConnections(target) >= targetResolution.MaximumConnections)
+        {
+            return MachineConnectionFailure.PortCapacityReached;
+        }
+
+        return MachineConnectionFailure.None;
     }
 
     public MachineConnectionResult TryRestore(MachineConnectionSnapshot snapshot)
@@ -495,20 +515,22 @@ public sealed class MachineConnectionNetwork
         foreach (var connection in GetDirectedTransferConnections().Where(predicate))
         {
             var definition = _connectionTypes.Get(connection.TypeId);
-            var maximumCredit = definition.TransferUnitsPerSecond *
-                                LogisticsConfiguration.MaximumStoredTransferCreditSeconds;
-            var credit = Math.Min(
-                maximumCredit,
-                _transferCredits[connection.Id] + definition.TransferUnitsPerSecond * deltaSeconds);
-            _transferCredits[connection.Id] = credit;
+            var maximumStoredCredit = definition.TransferUnitsPerSecond *
+                                      LogisticsConfiguration.MaximumStoredTransferCreditSeconds;
+            // Credit earned during the current simulation interval must remain available in
+            // full. This is especially important for the coarser 10-second offline steps. Only
+            // unused credit carried into a later tick is capped, preventing a blocked belt or
+            // pipe from releasing an unbounded burst when its target becomes free again.
+            var credit = Math.Min(maximumStoredCredit, _transferCredits[connection.Id]) +
+                         definition.TransferUnitsPerSecond * deltaSeconds;
             var transferableAmount = (int)Math.Floor(credit + Epsilon);
             var transferResult = transferableAmount > 0
                 ? Transfer(connection, definition, transferableAmount)
                 : TransportTransferResult.Failed(TransportTransferFailure.InsufficientTransferCredit);
-            if (transferResult.Succeeded)
-            {
-                _transferCredits[connection.Id] = Math.Max(0, credit - transferResult.TransferredAmount);
-            }
+            var unusedCredit = transferResult.Succeeded
+                ? Math.Max(0, credit - transferResult.TransferredAmount)
+                : credit;
+            _transferCredits[connection.Id] = Math.Min(maximumStoredCredit, unusedCredit);
 
             results.Add(new DirectedConnectionTickResult(
                 connection.Id,

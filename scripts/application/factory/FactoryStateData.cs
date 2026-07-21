@@ -1,4 +1,5 @@
 using SpaceFactory.Core.Inventory;
+using SpaceFactory.Core.Hazards;
 using SpaceFactory.Core.Items;
 using SpaceFactory.Core.Logistics;
 using SpaceFactory.Core.Production;
@@ -18,15 +19,32 @@ public sealed record FactoryStateData(
     ResearchStateSnapshot Research,
     bool FirstBasicGeneratorBuilt,
     double ShipFuel,
+    ShipFuelType ShipFuelType,
     IReadOnlyDictionary<string, DateTimeOffset> LastSimulatedUtcByComet,
     IReadOnlyList<InventorySlotState> AstronautInventory,
+    IReadOnlyList<InventorySlotState> HotbarInventory,
+    int ActiveHotbarSlotIndex,
+    IReadOnlyList<InventorySlotState> ToolInventory,
+    int SelectedToolSlotIndex,
+    bool IsHandModeActive,
     IReadOnlyList<InventorySlotState> ShipInventory,
     string? ActiveResearchStationId,
     IReadOnlyList<PowerNetworkControlState> PowerNetworkControls,
     ShipPowerState ShipPower,
     ShipDockingStateData ShipDocking)
 {
-    public const int CurrentVersion = 4;
+    public const int CurrentVersion = 8;
+
+    /// <summary>Zero-gravity item stacks currently released into the persistent world.</summary>
+    public IReadOnlyList<DroppedItemStateData> DroppedItems { get; init; } = [];
+
+    public static RadiationExposureSnapshot SafeRadiationExposure { get; } = new(
+        0,
+        RadiationConfiguration.StandardSuitProtection);
+
+    public RadiationExposureSnapshot RadiationExposure { get; init; } = new(
+        0,
+        RadiationConfiguration.StandardSuitProtection);
 
     public static FactoryStateData CreateDefault() => new(
         CurrentVersion,
@@ -35,8 +53,32 @@ public sealed record FactoryStateData(
         new ResearchState().CreateSnapshot(),
         false,
         ShipFuelConfiguration.TankCapacity,
+        ShipFuelConfiguration.NewGameFuelType,
         new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal),
         [],
+        [],
+        0,
+        [
+            new InventorySlotState(
+                0,
+                StarterEquipmentConfiguration.StartingMiningTool.ItemId.Value,
+                StarterEquipmentConfiguration.StartingMiningTool.Amount),
+            new InventorySlotState(
+                1,
+                StarterEquipmentConfiguration.StartingMachineDismantlingTool.ItemId.Value,
+                StarterEquipmentConfiguration.StartingMachineDismantlingTool.Amount),
+        ],
+        0,
+        true,
+        CreateDefaultShipInventory(),
+        null,
+        [],
+        ShipPowerState.Default,
+        ShipDockingStateData.Detached);
+
+    private static IReadOnlyList<InventorySlotState> CreateDefaultShipInventory()
+    {
+        List<InventorySlotState> slots =
         [
             new InventorySlotState(
                 0,
@@ -49,12 +91,18 @@ public sealed record FactoryStateData(
             new InventorySlotState(
                 2,
                 ProductionItemIds.TransportPipe.Value,
-                LogisticsConfiguration.StartingTransportPipeCount),
-        ],
-        null,
-        [],
-        ShipPowerState.Default,
-        ShipDockingStateData.Detached);
+                LogisticsConfiguration.StartingTransportPipeCount)
+        ];
+        if (ShipFuelConfiguration.IncludeHighPerformanceTestTankInNewGame)
+        {
+            slots.Add(new InventorySlotState(
+                3,
+                ShipFuelConfiguration.HighPerformanceTestCargo.ItemId.Value,
+                ShipFuelConfiguration.HighPerformanceTestCargo.Amount));
+        }
+
+        return slots;
+    }
 }
 
 /// <summary>
@@ -114,6 +162,21 @@ public sealed record ShipDockingStateData(
 public sealed record InventorySlotState(int Index, string ItemId, int Amount);
 
 /// <summary>
+/// Persistent inertial state for one dropped stack. IDs are stable across chunk unloads and
+/// save/load, while item presentation continues to come from the central item catalog.
+/// </summary>
+public sealed record DroppedItemStateData(
+    string Id,
+    string ItemId,
+    int Amount,
+    double PositionX,
+    double PositionY,
+    double RotationRadians,
+    double VelocityX,
+    double VelocityY,
+    double AngularVelocityRadians);
+
+/// <summary>
 /// Maps the mutable Core inventory to and from persistence DTOs without losing slot positions.
 /// The mapper deliberately accepts every syntactically valid item ID so raw resources, factory
 /// products and filled or empty containers all use the same save path.
@@ -161,7 +224,8 @@ public static class InventoryStatePersistence
         {
             if (slot is null || slot.Index < 0 || slot.Index >= inventory.SlotCount ||
                 !indices.Add(slot.Index) || string.IsNullOrWhiteSpace(slot.ItemId) ||
-                slot.Amount <= 0 || slot.Amount > inventory.MaximumStackSize)
+                slot.Amount <= 0 ||
+                slot.Amount > inventory.GetMaximumStackSize(new ItemId(slot.ItemId)))
             {
                 throw new ArgumentException(
                     "The persisted inventory contains an invalid occupied slot.",
@@ -187,7 +251,10 @@ public static class InventoryStatePersistence
 
         foreach (var slot in occupiedSlots.OrderBy(slot => slot.Index))
         {
-            var staging = new SlotInventory(1, inventory.MaximumStackSize);
+            var staging = new SlotInventory(
+                1,
+                inventory.MaximumStackSize,
+                inventory.GetMaximumStackSize);
             var itemId = new ItemId(slot.ItemId);
             if (!staging.Add(itemId, slot.Amount).Succeeded ||
                 !InventoryTransfer.Transfer(staging, 0, inventory, slot.Index).Succeeded)

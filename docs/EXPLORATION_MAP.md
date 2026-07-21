@@ -17,7 +17,8 @@ Aktiv geladen wird weiterhin ein gerichteter Radius von zwei Sektoren. Die Minim
 - Ein Linksklick innerhalb der runden Minimap öffnet die grosse Karte über denselben zentralen UI-Zustand wie `M` und zentriert zunächst auf das Schiff.
 - `M` öffnet oder schliesst die grosse Karte ausschliesslich im Raumschiff.
 - Ziehen mit linker oder mittlerer Maustaste verschiebt die Karte; das Mausrad zoomt um den Mauszeiger.
-- Ein Klick auf einen entdeckten Kometen setzt oder entfernt das Navigationsziel. Der HUD-Pfeil zeigt danach dynamisch zum Ziel.
+- Ein Linksklick auf einen entdeckten Kometen oder eigenen Marker setzt oder entfernt das exklusive Navigationsziel. Der HUD-Pfeil zeigt danach dynamisch zum Ziel.
+- Sobald das Raumschiff näher als die zentrale Grenze `TARGET_REACHED_DISTANCE = 150` kommt, endet nur die aktive Navigation. Pfeil, Entfernung und Kartenhervorhebungen verschwinden; Komet, Marker und Entdeckungsdaten bleiben erhalten.
 - Rechtsklick setzt einen einfachen Marker innerhalb eines bereits entdeckten Sektors.
 - **Zum Raumschiff** schaltet eine dauerhafte Kartenverfolgung um. Zoomen erhält die Verfolgung; manuelles Ziehen, ein Kometenziel, **Letzter Komet** oder eine Markeraktion an einem anderen Kartenort deaktivieren sie.
 - Schaltflächen zentrieren auf das Schiff oder den zuletzt entdeckten Kometen; landbare Kometen lassen sich filtern.

@@ -19,6 +19,7 @@ public partial class MachineConnectionView : Node2D
     private ConnectionPresentationDefinition? _presentation;
     private float _flowPhase;
     private float _activeVisualRemaining;
+    private float _dismantlingProgress;
 
     public MachineConnectionId ConnectionId => _connection?.Id ?? default;
 
@@ -34,7 +35,7 @@ public partial class MachineConnectionView : Node2D
 
     public override void _Process(double delta)
     {
-        if (_activeVisualRemaining <= 0)
+        if (_activeVisualRemaining <= 0 && _dismantlingProgress <= 0)
         {
             SetProcess(false);
             return;
@@ -82,6 +83,38 @@ public partial class MachineConnectionView : Node2D
         QueueRedraw();
     }
 
+    /// <summary>
+    /// Applies a presentation-only teardown preview. Connection ownership and the atomic refund
+    /// remain in the runtime controller; a value of zero restores the normal cable/belt/pipe.
+    /// </summary>
+    public void SetDismantlingProgress(float progress)
+    {
+        var normalized = float.IsFinite(progress) ? Math.Clamp(progress, 0, 1) : 0;
+        if (Mathf.IsEqualApprox(_dismantlingProgress, normalized))
+        {
+            return;
+        }
+
+        _dismantlingProgress = normalized;
+        SetProcess(_activeVisualRemaining > 0 || _dismantlingProgress > 0);
+        QueueRedraw();
+    }
+
+    public float DistanceToWorldPoint(Vector2 worldPoint)
+    {
+        if (_connection is null || _source is null || _target is null ||
+            !GodotObject.IsInstanceValid(_source) || !GodotObject.IsInstanceValid(_target))
+        {
+            return float.PositiveInfinity;
+        }
+
+        var source = ToLocal(_source.GetWorldConnectionAnchor(
+            ConnectionPresentationCatalog.GetSourceAnchor(_connection.Kind)));
+        var target = ToLocal(_target.GetWorldConnectionAnchor(
+            ConnectionPresentationCatalog.GetTargetAnchor(_connection.Kind)));
+        return DistanceToRoute(ToLocal(worldPoint), CreateRoute(source, target, _connection.Kind));
+    }
+
     public override void _Draw()
     {
         if (_connection is null || _source is null || _target is null || _hostComet is null ||
@@ -113,6 +146,34 @@ public partial class MachineConnectionView : Node2D
 
         DrawEndpoint(route[0], source: true);
         DrawEndpoint(route[^1], source: false);
+        if (_dismantlingProgress > 0)
+        {
+            DrawDismantlingOverlay(route);
+        }
+    }
+
+    private void DrawDismantlingOverlay(IReadOnlyList<Vector2> route)
+    {
+        var totalLength = GetRouteLength(route);
+        if (totalLength <= 0.01f)
+        {
+            return;
+        }
+
+        var energy = new Color(0.22f, 0.91f, 1f, 0.38f + (_dismantlingProgress * 0.48f));
+        var completedLength = totalLength * _dismantlingProgress;
+        const float spacing = 18;
+        for (var distance = 0f; distance <= completedLength; distance += spacing)
+        {
+            var point = GetPointAlongRoute(route, distance);
+            var ahead = GetPointAlongRoute(route, Math.Min(totalLength, distance + 5));
+            var direction = (ahead - point).Normalized();
+            var side = direction == Vector2.Zero ? Vector2.Up : direction.Orthogonal();
+            var separation = 1.5f + (_dismantlingProgress * 3.5f);
+            DrawLine(point - (side * separation), ahead - (side * separation), energy, 1.8f, true);
+            DrawLine(point + (side * separation), ahead + (side * separation), energy, 1.1f, true);
+            DrawCircle(point + (side * Mathf.Sin(_flowPhase + distance) * 4), 1.7f, energy);
+        }
     }
 
     private void DrawPowerCable(Vector2[] route, bool active)
@@ -254,5 +315,22 @@ public partial class MachineConnectionView : Node2D
         }
 
         return route[^1];
+    }
+
+    private static float DistanceToRoute(Vector2 point, IReadOnlyList<Vector2> route)
+    {
+        var closest = float.PositiveInfinity;
+        for (var index = 1; index < route.Count; index++)
+        {
+            var start = route[index - 1];
+            var delta = route[index] - start;
+            var lengthSquared = delta.LengthSquared();
+            var t = lengthSquared <= 0.0001f
+                ? 0
+                : Math.Clamp((point - start).Dot(delta) / lengthSquared, 0, 1);
+            closest = Math.Min(closest, point.DistanceTo(start + (delta * t)));
+        }
+
+        return closest;
     }
 }
